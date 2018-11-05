@@ -53,7 +53,6 @@ do(State) ->
                           end, rebar3_erlando_compile:new(), AllAppInfos),
                     {ok, _Module, Bin} = rebar3_erlando_compile:compile(CompileState),
                     OutDir = rebar_app_info:out_dir(ErlandoApp),
-                    io:format("outdir is ~p~n", [OutDir]),
                     ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
                     {ok, State};
                 [] ->

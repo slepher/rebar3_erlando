@@ -73,7 +73,6 @@ add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
     State#state{behaviour_modules = NBehaviourModules, types = NNTypes}.
 
 compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = BehaviourModules}) ->
-    io:format("behaviour modules is ~p~n", [BehaviourModules]),
     TypeclassModule = {attribute,0,module,typeclass},
     Export = {attribute,0,export,[{module,2}, {is_typeclass, 1}, {type, 1}]},
     TypesFun = generate_type(Types),
