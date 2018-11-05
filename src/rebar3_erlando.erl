@@ -28,8 +28,15 @@ init(State) ->
     {ok, State1}.
 
 do(State) ->
+    App = rebar_state:current_app(State),
     AppInfos = rebar_state:project_apps(State),
-    rebar_api:info("Running erlando compile...", []),
+    case App of
+        undefined ->
+            rebar_api:info("Running erlando compile...", []);
+        _ ->
+            AppName = rebar_app_info:name(App),
+            rebar_api:info("Running erlando compile for ~s...", [AppName])
+    end,
     Deps = rebar_state:deps_to_build(State),
     AllAppInfos = Deps ++ AppInfos,
     case lists:filter(
