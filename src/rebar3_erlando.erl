@@ -30,13 +30,6 @@ init(State) ->
 do(State) ->
     App = rebar_state:current_app(State),
     AppInfos = rebar_state:project_apps(State),
-    case App of
-        undefined ->
-            rebar_api:info("Running erlando compile...", []);
-        _ ->
-            AppName = rebar_app_info:name(App),
-            rebar_api:info("Running erlando compile for ~s...", [AppName])
-    end,
     Deps = rebar_state:deps_to_build(State),
     AllAppInfos = Deps ++ AppInfos,
     case lists:filter(
@@ -45,38 +38,75 @@ do(State) ->
                    Name == <<"erlando">>
            end, AllAppInfos) of
         [ErlandoApp] ->
-            CompileState = 
-                lists:foldl(
-                  fun(AppInfo, Acc) ->
-                          case match_modules(AppInfo) of
-                              {ok, {Typeclasses, Types, ModuleMap}} ->
-                                  rebar3_erlando_compile:add_modules(Typeclasses, Types, ModuleMap, Acc);
-                              {error, _Reason} ->
-                                  Acc
-                          end
-                  end, rebar3_erlando_compile:new(), AllAppInfos),
-            {ok, _Module, Bin} = rebar3_erlando_compile:compile(CompileState),
-            OutDir = rebar_app_info:out_dir(ErlandoApp),
-            ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
-            {ok, State};
+            case App of
+                undefined ->
+                    clear_erlando_state(ErlandoApp);
+                _ ->
+                    AppName = rebar_app_info:name(App),
+                    rebar_api:info("Running erlando compile for ~s...", [AppName]),
+                    ErlandoState = get_erlando_state(ErlandoApp),
+                    NErlandoState = 
+                        case match_modules(App) of
+                            {ok, {Typeclasses, Types, ModuleMap}} ->
+                                rebar3_erlando_compile:add_modules(Typeclasses, Types, ModuleMap, ErlandoState);
+                            {error, _Reason} ->
+                                ErlandoState
+                        end,
+                    {ok, _Module, Bin} = rebar3_erlando_compile:compile(NErlandoState),
+                    update_erlando_state(ErlandoApp, NErlandoState),
+                    OutDir = rebar_app_info:out_dir(ErlandoApp),
+                    ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
+                    case is_project_app(App, AppInfos) of
+                        true ->
+                            clear_erlando_state(ErlandoApp);
+                        false ->
+                            ok
+                    end,
+                    {ok, State}
+            end;
         [] ->
             io:format("erlando app is not included in project, why use rebar3_erlando to compile?~n"),
             {ok, State}
     end.
 
-%is_umbrella_app(undefined) ->
-%    true;
-%is_umbrella_app(_) ->
-%    false.
+get_erlando_state(ErlandoApp) ->
+    OutDir = rebar_app_info:out_dir(ErlandoApp),
+    StateFile = filename:join(OutDir, "erlando.state"),
+    case filelib:is_file(StateFile) of
+        true ->
+            case file:consult(StateFile) of
+                {ok, [State]} ->
+                    State;
+                {error, Reason} ->
+                    io:format("consult ~s failed ~p~n", [StateFile, Reason]),
+                    rebar3_erlando_compile:new()
+            end;
+        false ->
+            rebar3_erlando_compile:new()
+    end.
 
-%is_project_app(undefined, _) ->
-%    false;
-%is_project_app(AppInfo, [ProjectAppInfo]) ->
-%    Name = rebar_app_info:name(AppInfo),
-%    ProjectName = rebar_app_info:name(ProjectAppInfo),
-%    Name == ProjectName;
-%is_project_app(_AppInfo, _ProjectAppInfos) ->
-%    false.
+update_erlando_state(ErlandoApp, ErlandoState) ->
+    OutDir = rebar_app_info:out_dir(ErlandoApp),
+    StateFile = filename:join(OutDir, "erlando.state"),
+    Spec = io_lib:format("~p.\n", [ErlandoState]),
+    ok = rebar_file_utils:write_file_if_contents_differ(StateFile, Spec, utf8).
+
+clear_erlando_state(ErlandoApp) ->
+    OutDir = rebar_app_info:out_dir(ErlandoApp),
+    StateFile = filename:join(OutDir, "erlando.state"),
+    case filelib:is_file(StateFile) of
+        true ->
+            file:delete(StateFile);
+        false ->
+            ok
+    end.
+
+is_project_app(AppInfo, [ProjectAppInfo]) ->
+    Name = rebar_app_info:name(AppInfo),
+    ProjectName = rebar_app_info:name(ProjectAppInfo),
+    Name == ProjectName;
+is_project_app(_AppInfo, _ProjectAppInfos) ->
+    false.
 
 match_modules(AppInfo) ->
     OutDir = rebar_app_info:out_dir(AppInfo),
