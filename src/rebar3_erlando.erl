@@ -28,54 +28,48 @@ init(State) ->
     {ok, State1}.
 
 do(State) ->
-    CurrentApp = rebar_state:current_app(State),
     AppInfos = rebar_state:project_apps(State),
-    case is_umbrella_app(CurrentApp) or is_project_app(CurrentApp, AppInfos) of
-        true ->
-            rebar_api:info("Running erlando compile...", []),
-            Deps = rebar_state:deps_to_build(State),
-            AllAppInfos = Deps ++ AppInfos,
-            case lists:filter(
-                   fun(AppInfo) ->
-                           Name = rebar_app_info:name(AppInfo),
-                           Name == <<"erlando">>
-                   end, AllAppInfos) of
-                [ErlandoApp] ->
-                    CompileState = 
-                        lists:foldl(
-                          fun(AppInfo, Acc) ->
-                                  case match_modules(AppInfo) of
-                                      {ok, {Typeclasses, Types, ModuleMap}} ->
-                                          rebar3_erlando_compile:add_modules(Typeclasses, Types, ModuleMap, Acc);
-                                      {error, _Reason} ->
-                                          Acc
-                                  end
-                          end, rebar3_erlando_compile:new(), AllAppInfos),
-                    {ok, _Module, Bin} = rebar3_erlando_compile:compile(CompileState),
-                    OutDir = rebar_app_info:out_dir(ErlandoApp),
-                    ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
-                    {ok, State};
-                [] ->
-                    io:format("erlando app is not included in project, why use rebar3_erlando to compile?~n"),
-                    {ok, State}
-            end;
-        false ->
+    rebar_api:info("Running erlando compile...", []),
+    Deps = rebar_state:deps_to_build(State),
+    AllAppInfos = Deps ++ AppInfos,
+    case lists:filter(
+           fun(AppInfo) ->
+                   Name = rebar_app_info:name(AppInfo),
+                   Name == <<"erlando">>
+           end, AllAppInfos) of
+        [ErlandoApp] ->
+            CompileState = 
+                lists:foldl(
+                  fun(AppInfo, Acc) ->
+                          case match_modules(AppInfo) of
+                              {ok, {Typeclasses, Types, ModuleMap}} ->
+                                  rebar3_erlando_compile:add_modules(Typeclasses, Types, ModuleMap, Acc);
+                              {error, _Reason} ->
+                                  Acc
+                          end
+                  end, rebar3_erlando_compile:new(), AllAppInfos),
+            {ok, _Module, Bin} = rebar3_erlando_compile:compile(CompileState),
+            OutDir = rebar_app_info:out_dir(ErlandoApp),
+            ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
+            {ok, State};
+        [] ->
+            io:format("erlando app is not included in project, why use rebar3_erlando to compile?~n"),
             {ok, State}
     end.
 
-is_umbrella_app(undefined) ->
-    true;
-is_umbrella_app(_) ->
-    false.
+%is_umbrella_app(undefined) ->
+%    true;
+%is_umbrella_app(_) ->
+%    false.
 
-is_project_app(undefined, _) ->
-    false;
-is_project_app(AppInfo, [ProjectAppInfo]) ->
-    Name = rebar_app_info:name(AppInfo),
-    ProjectName = rebar_app_info:name(ProjectAppInfo),
-    Name == ProjectName;
-is_project_app(_AppInfo, _ProjectAppInfos) ->
-    false.
+%is_project_app(undefined, _) ->
+%    false;
+%is_project_app(AppInfo, [ProjectAppInfo]) ->
+%    Name = rebar_app_info:name(AppInfo),
+%    ProjectName = rebar_app_info:name(ProjectAppInfo),
+%    Name == ProjectName;
+%is_project_app(_AppInfo, _ProjectAppInfos) ->
+%    false.
 
 match_modules(AppInfo) ->
     OutDir = rebar_app_info:out_dir(AppInfo),
