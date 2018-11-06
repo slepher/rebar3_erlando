@@ -10,6 +10,14 @@ add command for erlando
 
     $ rebar3 erlando compile
 
-add to rebar.config in project main directory to make erlando compile typeclass.beam after all modules compiled
+typeclass.beam is now generated compile time by rebar3_erlando rebar3 plugin
+
+if you want to use typeclass system by attribute -superclass|-erlando_type, you should add
 
     {provider_hooks, [{post, [{compile, {erlando, compile}}]}]}.
+    
+to rebar.config in your project
+
+otherwise, rebar.config in project which deps on erlando is no need to change.
+
+erlando_typeclass:register_application/1 is nolonger used.
