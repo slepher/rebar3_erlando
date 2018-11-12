@@ -78,7 +78,7 @@ compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = Beh
     TypesFun = generate_type(Types),
     IsTypeClass = generate_is_typeclass(Typeclasses),
     Module = generate_module(BehaviourModules),
-    compile:forms([TypeclassModule, Export, TypesFun, IsTypeClass, Module]).
+    compile:forms([TypeclassModule, Export, TypesFun, IsTypeClass, Module], [debug_info]).
 
 %%--------------------------------------------------------------------
 %% @doc
