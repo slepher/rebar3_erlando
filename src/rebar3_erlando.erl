@@ -40,11 +40,11 @@ do(State) ->
         [ErlandoApp] ->
             case App of
                 undefined ->
-                    clear_erlando_state(ErlandoApp);
+                    clear_erlando_state();
                 _ ->
                     AppName = rebar_app_info:name(App),
                     rebar_api:info("Running erlando compile for ~s...", [AppName]),
-                    ErlandoState = get_erlando_state(ErlandoApp),
+                    ErlandoState = get_erlando_state(),
                     NErlandoState = 
                         case match_modules(State, App) of
                             {ok, {Typeclasses, Types, ModuleMap}} ->
@@ -53,12 +53,12 @@ do(State) ->
                                 ErlandoState
                         end,
                     {ok, _Module, Bin} = rebar3_erlando_compile:compile(NErlandoState),
-                    update_erlando_state(ErlandoApp, NErlandoState),
+                    update_erlando_state(NErlandoState),
                     OutDir = rebar_app_info:out_dir(ErlandoApp),
                     ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
                     case is_project_app(App, AppInfos) of
                         true ->
-                            clear_erlando_state(ErlandoApp);
+                            clear_erlando_state();
                         false ->
                             ok
                     end,
@@ -69,10 +69,9 @@ do(State) ->
             {ok, State}
     end.
 
-get_erlando_state(ErlandoApp) ->
-    OutDir = rebar_app_info:out_dir(ErlandoApp),
-    StateFile = filename:join(OutDir, "erlando.state"),
-    case filelib:is_file(StateFile) of
+get_erlando_state() ->
+    StateFile =  "erlando.state",
+    case filelib:is_file("erlando.state") of
         true ->
             case file:consult(StateFile) of
                 {ok, [State]} ->
@@ -85,15 +84,13 @@ get_erlando_state(ErlandoApp) ->
             rebar3_erlando_compile:new()
     end.
 
-update_erlando_state(ErlandoApp, ErlandoState) ->
-    OutDir = rebar_app_info:out_dir(ErlandoApp),
-    StateFile = filename:join(OutDir, "erlando.state"),
+update_erlando_state(ErlandoState) ->
+    StateFile =  "erlando.state",
     Spec = io_lib:format("~p.\n", [ErlandoState]),
     ok = rebar_file_utils:write_file_if_contents_differ(StateFile, Spec, utf8).
 
-clear_erlando_state(ErlandoApp) ->
-    OutDir = rebar_app_info:out_dir(ErlandoApp),
-    StateFile = filename:join(OutDir, "erlando.state"),
+clear_erlando_state() ->
+    StateFile =  "erlando.state",
     case filelib:is_file(StateFile) of
         true ->
             file:delete(StateFile);
