@@ -46,9 +46,9 @@ add_typeclass(Module, #state{typeclasses = Typeclasses} = State) ->
 
 add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs} = State) ->
     case get_core_from_beam(Beamfile) of
-        {ok, Core} ->
+        {ok, {Core, AbsOrCore}} ->
             {NETypes, NModRecs} = 
-                update_types_and_rec_map(Module, Core, ETypes, ModRecs),
+                update_types_and_rec_map(Module, Core, AbsOrCore, ETypes, ModRecs),
             State#state{exported_types = NETypes, mod_recs = NModRecs};
         {error, _Reason} ->
             State
@@ -90,13 +90,21 @@ compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = Beh
 %%% Internal functions
 %%%===================================================================
 get_core_from_beam(BeamFile) ->
-    try
-        dialyzer_utils:get_core_from_beam(BeamFile)
+    try dialyzer_utils:get_core_from_beam(BeamFile) of
+        {ok, Core} ->
+            {ok, {Core, Core}};
+        {error, Reason} ->
+            {error, Reason}
     catch
         error:undef ->
             case dialyzer_utils:get_abstract_code_from_beam(BeamFile) of
                 {ok, Abs} ->
-                    dialyzer_utils:get_core_from_abstract_code(Abs);
+                    case dialyzer_utils:get_core_from_abstract_code(Abs) of
+                        {ok, Core} ->
+                            {ok, {Core, Abs}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -305,8 +313,8 @@ type_patterns(Module, Types, ETypes, ModRecs) ->
               end
       end, [], Types).
 
-update_types_and_rec_map(Module, Core, Types, MRecDict) ->
-    case rec_map(Core) of
+update_types_and_rec_map(Module, Core, AbsOrCore, Types, MRecDict) ->
+    case rec_map(AbsOrCore) of
         {ok, RecMap} ->
             MTypes = exported_types(Core),
             NETypeAcc = sets:union(MTypes, Types),
@@ -332,5 +340,5 @@ exported_types(Core) ->
     M = cerl:atom_val(cerl:module_name(Core)),
     sets:from_list([{M, F, A} || {F, A} <- ExpTypes2]).
 
-rec_map(Core) ->
-    dialyzer_utils:get_record_and_type_info(Core).
+rec_map(AbsOrCore) ->
+    dialyzer_utils:get_record_and_type_info(AbsOrCore).
