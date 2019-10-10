@@ -11,7 +11,8 @@
 %% API
 -export([new/0, add_modules/4, compile/1]).
 
--record(state, {behaviour_modules = maps:new(), 
+-record(state, {otp_version,
+                behaviour_modules = maps:new(), 
                 typeclasses = [],
                 type_aliases = [], 
                 types = maps:new(),
@@ -46,10 +47,10 @@ add_typeclass(Module, #state{typeclasses = Typeclasses} = State) ->
 
 add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs} = State) ->
     case get_core_from_beam(Beamfile) of
-        {ok, {Core, AbsOrCore}} ->
+        {ok, {OtpVersion, Core, AbsOrCore}} ->
             {NETypes, NModRecs} = 
                 update_types_and_rec_map(Module, Core, AbsOrCore, ETypes, ModRecs),
-            State#state{exported_types = NETypes, mod_recs = NModRecs};
+            State#state{exported_types = NETypes, mod_recs = NModRecs, otp_version = OtpVersion};
         {error, _Reason} ->
             State
     end.
@@ -58,9 +59,10 @@ add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs}
 % then add type
 add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
                                           typeclasses = Typeclasses, types = Types, 
-                                          exported_types = ETypes, mod_recs = ModRecs} = State) ->    
+                                          exported_types = ETypes, mod_recs = ModRecs,
+                                          otp_version = OtpVersion} = State) ->    
     {TypeInstanceMap, TypeBehaviourModuleMap} = 
-        module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs),
+        module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion),
     NTypes = merge_type_instance(Types, TypeInstanceMap),
     NBehaviourModules = maps:merge(BehaviourModules, TypeBehaviourModuleMap),
     NNTypes = 
@@ -92,7 +94,7 @@ compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = Beh
 get_core_from_beam(BeamFile) ->
     try dialyzer_utils:get_core_from_beam(BeamFile) of
         {ok, Core} ->
-            {ok, {Core, Core}};
+            {ok, {r20_up, Core, Core}};
         {error, Reason} ->
             {error, Reason}
     catch
@@ -101,7 +103,7 @@ get_core_from_beam(BeamFile) ->
                 {ok, Abs} ->
                     case dialyzer_utils:get_core_from_abstract_code(Abs) of
                         {ok, Core} ->
-                            {ok, {Core, Abs}};
+                            {ok, {r19, Core, Abs}};
                         {error, Reason} ->
                             {error, Reason}
                     end;
@@ -110,7 +112,7 @@ get_core_from_beam(BeamFile) ->
             end
     end.
 
-type_with_remote(Module, Type, Args, ExportedTypes, TRecMap) ->
+type_with_remote(Module, Type, Args, ExportedTypes, TRecMap, OtpVersion) ->
     RecMap = case dict:find(Module, TRecMap) of
                  {ok, Val} ->
                      Val;
@@ -121,12 +123,22 @@ type_with_remote(Module, Type, Args, ExportedTypes, TRecMap) ->
     Type1 = {type, {Module, Type, Args}},
     case maps:find(Type0, RecMap) of
         {ok, {{Module, _FileLine, TypeForm, _ArgNames}, _}} ->
-            Cache = #cache{mod_recs = {mrecs, TRecMap}},
-            {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, undefined, #{}, Cache),
+            CType = t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, OtpVersion),
             {ok, CType};
         error ->
             {error, undefined_type}
     end.
+
+t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r20_up) ->
+    Cache = #cache{mod_recs = {mrecs, TRecMap}},
+    VarTable = erl_types:var_table__new(),
+    {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, undefined, VarTable, Cache),
+    CType;
+t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r19) ->
+    Cache = erl_types:cache__new(),
+    VarTable = erl_types:var_table__new(),
+    {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, VarTable, Cache),
+    CType.
 
 type_to_patterns({c, tuple, Tuples, _}) ->
     TupleLists = 
@@ -203,13 +215,13 @@ pattern_to_pattern_gurads(Line, {guard, Guard}, Guards, Offset) ->
     {{var, Line, ArgName},
      [{call, Line, {atom, Line, Guard}, [{var, Line, ArgName}]}|Guards], Offset + 1}.
 
-module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs) ->
+module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion) ->
     TypeAttrs = types(Attributes),
     Behaviours = behaviours(Attributes),
     TypeInstanceMap = 
         lists:foldl(
           fun({Type, UsedTypes}, Acc1) ->
-                  Patterns = type_patterns(Module, UsedTypes, ETypes, ModRecs),
+                  Patterns = type_patterns(Module, UsedTypes, ETypes, ModRecs, OtpVersion),
                   maps:put(Type, Patterns, Acc1);
              (Type, Acc1) when is_atom(Type) ->
                   case maps:find(Type, Acc1) of
@@ -301,10 +313,10 @@ module_clause(Line, Type, Behaviour, Module) ->
     {clause, 1, [{atom, Line, Type}, {atom, Line, Behaviour}], [],
      [{atom, Line, Module}]}.
 
-type_patterns(Module, Types, ETypes, ModRecs) ->
+type_patterns(Module, Types, ETypes, ModRecs, OtpVersion) ->
     lists:foldl(
       fun({Type, Arity}, Acc) ->
-              case type_with_remote(Module, Type, Arity, ETypes, ModRecs) of
+              case type_with_remote(Module, Type, Arity, ETypes, ModRecs, OtpVersion) of
                   {ok, CType} ->
                       Patterns = type_to_patterns(CType),
                       lists:usort(Patterns ++ Acc);
