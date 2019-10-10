@@ -45,7 +45,7 @@ add_typeclass(Module, #state{typeclasses = Typeclasses} = State) ->
     State#state{typeclasses = NTypeclasses}.
 
 add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs} = State) ->
-    case dialyzer_utils:get_core_from_beam(Beamfile) of
+    case get_core_from_beam(Beamfile) of
         {ok, Core} ->
             {NETypes, NModRecs} = 
                 update_types_and_rec_map(Module, Core, ETypes, ModRecs),
@@ -89,6 +89,19 @@ compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = Beh
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+get_core_from_beam(BeamFile) ->
+    try
+        dialyzer_utils:get_core_from_beam(BeamFile)
+    catch
+        error:undef ->
+            case dialyzer_utils:get_abstract_code_from_beam(BeamFile) of
+                {ok, Abs} ->
+                    dialyzer_utils:get_core_from_abstract_code(Abs);
+                {error, Reason} ->
+                    {error, Reason}
+            end
+    end.
+
 type_with_remote(Module, Type, Args, ExportedTypes, TRecMap) ->
     RecMap = case dict:find(Module, TRecMap) of
                  {ok, Val} ->
