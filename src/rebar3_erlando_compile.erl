@@ -217,7 +217,9 @@ pattern_to_pattern_gurads(Line, {guard, Guard}, Guards, Offset) ->
 
 module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion) ->
     TypeAttrs = types(Attributes),
-    Behaviours = behaviours(Attributes),
+    Behaviours0 = behaviours(Attributes),
+    Behaviours1 = erlando_behaviours(Attributes),
+    Behaviours = Behaviours0 ++ Behaviours1,
     TypeInstanceMap = 
         lists:foldl(
           fun({Type, UsedTypes}, Acc1) ->
@@ -265,6 +267,9 @@ types(Attributes) ->
 
 behaviours(Attributes) ->
     proplists:get_value(behaviour, Attributes, []).
+
+erlando_behaviours(Attributes) ->
+    proplists:get_value(erlando_future_behaviour, Attributes, []).
 
 generate_type(Types) ->
     Clauses = 
@@ -338,8 +343,8 @@ update_types_and_rec_map(Module, Core, AbsOrCore, Types, MRecDict) ->
                         dict:store(Module, RecMap, MRecDict)
                 end,
             {NETypeAcc, NMRecDict};
-        {error, _Reason} ->
-            io:format("reason is ~p", [_Reason]),
+        {error, Reason} ->
+            rebar_api:debug("reason is ~p", [Reason]),
             {Types, MRecDict}
     end.
 

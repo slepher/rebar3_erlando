@@ -29,6 +29,7 @@ init(State) ->
 
 do(State) ->
     App = rebar_state:current_app(State),
+    AppName = rebar_app_info:name(App),
     AppInfos = rebar_state:project_apps(State),
     Deps = rebar_state:deps_to_build(State),
     AllAppInfos = Deps ++ AppInfos,
@@ -65,7 +66,12 @@ do(State) ->
                     {ok, State}
             end;
         [] ->
-            io:format("erlando app is not included in project, why use rebar3_erlando to compile?~n"),
+            case AppName of
+                <<"astranaut">> ->
+                    ok;
+                _ ->
+                    rebar_api:warn("erlando app is not included in project, why use rebar3_erlando to compile?", [])
+            end,
             {ok, State}
     end.
 
@@ -77,7 +83,7 @@ get_erlando_state() ->
                 {ok, [State]} ->
                     State;
                 {error, Reason} ->
-                    io:format("consult ~s failed ~p~n", [StateFile, Reason]),
+                    rebar_api:info("consult ~s failed ~p", [StateFile, Reason]),
                     rebar3_erlando_compile:new()
             end;
         false ->
@@ -112,6 +118,7 @@ match_modules(State, AppInfo) ->
                   case beam_lib:chunks(Beamfile, [attributes]) of
                       {ok, {Module, [{attributes, Attributes}]}} ->
                           AttrKeys = lists:map(fun(E) -> element(1, E) end, Attributes),
+                          ErlandoBehaviours = proplists:get_value(erlando_future_behaviour, Attributes, []),
                           NTypeclassesAcc = 
                               case lists:member(superclass, AttrKeys) of
                                   true ->
@@ -119,6 +126,7 @@ match_modules(State, AppInfo) ->
                                   false ->
                                       TypeclassesAcc
                               end,
+                          NTypeclassesAcc1 = ErlandoBehaviours ++ NTypeclassesAcc,
                           NTypesAcc = 
                               case lists:member(erlando_type, AttrKeys) of
                                   true ->
@@ -126,7 +134,7 @@ match_modules(State, AppInfo) ->
                                   false ->
                                       TypesAcc
                               end,
-                          {NTypeclassesAcc, NTypesAcc, maps:put(Module, Beamfile, ModulesAcc)};
+                          {NTypeclassesAcc1, NTypesAcc, maps:put(Module, Beamfile, ModulesAcc)};
                       {error, _Reason} ->
                           {TypeclassesAcc, TypesAcc, ModulesAcc}
                   end
@@ -142,7 +150,6 @@ match_modules(State, AppInfo) ->
         {error, Reason} ->
             {error, Reason}
     end.
-
 
 -spec format_error(any()) ->  iolist().
 format_error(Reason) ->
