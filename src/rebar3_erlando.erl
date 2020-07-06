@@ -100,9 +100,8 @@ update_erlando_state(ErlandoState) ->
 
 ensure_dir(<<"astranaut">>, Dir) ->
     rebar3_erlando_file:ensure_dir(Dir);
-ensure_dir(_App, Dir) ->
+ensure_dir(_App, _Dir) ->
     ok.
-
 
 clear_erlando_state() ->
     StateFile =  "erlando.state",
