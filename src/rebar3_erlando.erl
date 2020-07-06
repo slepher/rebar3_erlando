@@ -46,8 +46,9 @@ do(State) ->
                     AppName = rebar_app_info:name(App),
                     rebar_api:info("Running erlando compile for ~s...", [AppName]),
                     ErlandoState = get_erlando_state(),
+                    IsProjectApp = is_project_app(App, AppInfos),
                     NErlandoState = 
-                        case match_modules(State, App) of
+                        case match_modules(State, App, IsProjectApp) of
                             {ok, {Typeclasses, Types, ModuleMap}} ->
                                 rebar3_erlando_compile:add_modules(Typeclasses, Types, ModuleMap, ErlandoState);
                             {error, _Reason} ->
@@ -56,8 +57,10 @@ do(State) ->
                     {ok, _Module, Bin} = rebar3_erlando_compile:compile(NErlandoState),
                     update_erlando_state(NErlandoState),
                     OutDir = rebar_app_info:out_dir(ErlandoApp),
+                    EbinDir = filename:join(OutDir, "ebin"),
+                    ensure_dir(AppName, EbinDir),
                     ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
-                    case is_project_app(App, AppInfos) of
+                    case IsProjectApp of
                         true ->
                             clear_erlando_state();
                         false ->
@@ -95,6 +98,12 @@ update_erlando_state(ErlandoState) ->
     Spec = io_lib:format("~p.\n", [ErlandoState]),
     ok = rebar_file_utils:write_file_if_contents_differ(StateFile, Spec, utf8).
 
+ensure_dir(<<"astranaut">>, Dir) ->
+    rebar3_erlando_file:ensure_dir(Dir);
+ensure_dir(_App, Dir) ->
+    ok.
+
+
 clear_erlando_state() ->
     StateFile =  "erlando.state",
     case filelib:is_file(StateFile) of
@@ -111,7 +120,7 @@ is_project_app(AppInfo, [ProjectAppInfo]) ->
 is_project_app(_AppInfo, _ProjectAppInfos) ->
     false.
 
-match_modules(State, AppInfo) ->
+match_modules(State, AppInfo, IsProjectApp) ->
     OutDir = rebar_app_info:out_dir(AppInfo),
     Profiles = rebar_state:current_profiles(State),
     Fun = fun(Beamfile, {TypeclassesAcc, TypesAcc, ModulesAcc}) ->
@@ -141,14 +150,30 @@ match_modules(State, AppInfo) ->
           end,
     case rebar3_erlando_file:fold_beams(Fun, {[], [], maps:new()}, filename:join(OutDir, "ebin")) of
         {ok, Result} ->
-            case lists:member(test, Profiles) of
-                true ->
-                    rebar3_erlando_file:fold_beams(Fun, Result, filename:join(OutDir, "test"));
-                false ->
+            case test_dir(OutDir, IsProjectApp, Profiles) of
+                {ok, TestDir} ->
+                    rebar3_erlando_file:fold_beams(Fun, Result, TestDir);
+                error ->
                     {ok, Result}
             end;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+test_dir(_OutDir, false, _Profiles) ->
+    error;
+test_dir(OutDir, true, Profiles) ->
+    case lists:member(test, Profiles) of
+        true ->
+            TestDir = filename:join(OutDir, "test"),
+            case filelib:is_dir(TestDir) of
+                true ->
+                    {ok, TestDir};
+                false ->
+                    error
+            end;
+        false ->
+            error
     end.
 
 -spec format_error(any()) ->  iolist().
