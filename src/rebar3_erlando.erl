@@ -54,12 +54,8 @@ do(State) ->
                             {error, _Reason} ->
                                 ErlandoState
                         end,
-                    {ok, _Module, Bin} = rebar3_erlando_compile:compile(NErlandoState),
                     update_erlando_state(NErlandoState),
-                    OutDir = rebar_app_info:out_dir(ErlandoApp),
-                    EbinDir = filename:join(OutDir, "ebin"),
-                    ensure_dir(AppName, EbinDir),
-                    ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin),
+                    write_beam(AppName, NErlandoState, ErlandoApp),
                     case IsProjectApp of
                         true ->
                             clear_erlando_state();
@@ -78,6 +74,13 @@ do(State) ->
             {ok, State}
     end.
 
+write_beam(<<"astranaut">>, _ErlandoState, _ErlandoApp) ->
+    ok;
+write_beam(_AppName, ErlandoState, ErlandoApp) ->
+    {ok, _Module, Bin} = rebar3_erlando_compile:compile(ErlandoState),
+    OutDir = rebar_app_info:out_dir(ErlandoApp),
+    ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin).
+    
 get_erlando_state() ->
     StateFile =  "erlando.state",
     case filelib:is_file("erlando.state") of
@@ -97,11 +100,6 @@ update_erlando_state(ErlandoState) ->
     StateFile =  "erlando.state",
     Spec = io_lib:format("~p.\n", [ErlandoState]),
     ok = rebar_file_utils:write_file_if_contents_differ(StateFile, Spec, utf8).
-
-ensure_dir(<<"astranaut">>, Dir) ->
-    rebar3_erlando_file:ensure_dir(Dir);
-ensure_dir(_App, _Dir) ->
-    ok.
 
 clear_erlando_state() ->
     StateFile =  "erlando.state",
