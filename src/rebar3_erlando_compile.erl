@@ -130,15 +130,55 @@ type_with_remote(Module, Type, Args, ExportedTypes, TRecMap, OtpVersion) ->
     end.
 
 t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r20_up) ->
-    Cache = #cache{mod_recs = {mrecs, TRecMap}},
+    OtpRelease = list_to_integer(erlang:system_info(otp_release)),
     VarTable = erl_types:var_table__new(),
-    {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, undefined, VarTable, Cache),
-    CType;
+    TypeSite =
+        case OtpRelease >= 24 of
+            true ->
+                erlang:append_element(Type1, "");
+            false ->
+                Type1
+        end,
+    Cache =
+        case OtpRelease >= 26 of
+            true ->
+                #cache{mod_recs = maps:from_list(dict:to_list(TRecMap))};
+            false ->
+                #cache{mod_recs = {mrecs, TRecMap}}
+        end,
+    case OtpRelease >= 25 of
+        true ->
+            t_from_form_with_exported_types_table(
+              TypeForm, ExportedTypes, TypeSite, VarTable, Cache);
+        false ->
+            {CType, _NCache} =
+                erl_types:t_from_form(
+                  TypeForm, ExportedTypes, TypeSite,
+                  undefined, VarTable, Cache),
+            CType
+    end;
 t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r19) ->
     Cache = erl_types:cache__new(),
     VarTable = erl_types:var_table__new(),
     {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, VarTable, Cache),
     CType.
+
+t_from_form_with_exported_types_table(
+  TypeForm, ExportedTypes, TypeSite, VarTable, Cache) ->
+    ExportedTypesTable = ets:new(exported_types, [set]),
+    true = ets:insert(
+             ExportedTypesTable,
+             [{ExportedType} ||
+                 ExportedType <- sets:to_list(ExportedTypes)]),
+    try
+        {CType, _NCache} =
+            erl_types:t_from_form(
+              TypeForm, ExportedTypesTable, TypeSite,
+              undefined, VarTable, Cache),
+        CType
+    after
+        ets:delete(ExportedTypesTable)
+    end.
 
 type_to_patterns({c, tuple, Tuples, _}) ->
     TupleLists = 
