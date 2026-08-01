@@ -46,13 +46,14 @@ add_typeclass(Module, #state{typeclasses = Typeclasses} = State) ->
     State#state{typeclasses = NTypeclasses}.
 
 add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs} = State) ->
+    State1 = State#state{beamfiles = maps:put(Module, Beamfile, State#state.beamfiles)},
     case get_core_from_beam(Beamfile) of
         {ok, {OtpVersion, Core, AbsOrCore}} ->
             {NETypes, NModRecs} = 
                 update_types_and_rec_map(Module, Core, AbsOrCore, ETypes, ModRecs),
-            State#state{exported_types = NETypes, mod_recs = NModRecs, otp_version = OtpVersion};
+            State1#state{exported_types = NETypes, mod_recs = NModRecs, otp_version = OtpVersion};
         {error, _Reason} ->
-            State
+            State1
     end.
                   
 % add typeclass first 
@@ -60,11 +61,13 @@ add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs}
 add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
                                           typeclasses = Typeclasses, types = Types, 
                                           exported_types = ETypes, mod_recs = ModRecs,
-                                          otp_version = OtpVersion} = State) ->    
+                                          otp_version = OtpVersion,
+                                          beamfiles = Beamfiles} = State) ->
+    validate_module(Module, Attributes, Typeclasses, Beamfiles),
     {TypeInstanceMap, TypeBehaviourModuleMap} = 
         module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion),
     NTypes = merge_type_instance(Types, TypeInstanceMap),
-    NBehaviourModules = maps:merge(BehaviourModules, TypeBehaviourModuleMap),
+    NBehaviourModules = merge_behaviour_modules(BehaviourModules, TypeBehaviourModuleMap),
     NNTypes = 
         maps:map(
           fun(Type, undefined) ->
@@ -73,6 +76,225 @@ add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
                   Patterns
           end, NTypes),
     State#state{behaviour_modules = NBehaviourModules, types = NNTypes}.
+
+validate_module(Module, Attributes, Typeclasses, Beamfiles) ->
+    DeclaredBehaviours = lists:usort(behaviours(Attributes) ++ erlando_behaviours(Attributes)),
+    InstanceBehaviours =
+        [Behaviour || Behaviour <- DeclaredBehaviours,
+                      ordsets:is_element(Behaviour, Typeclasses)],
+    validate_instance_metadata(
+      Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles),
+    Exports = module_exports(Module, Beamfiles),
+    lists:foreach(
+      fun(Behaviour) ->
+              Required = required_callbacks(Behaviour, Beamfiles),
+              Missing = Required -- Exports,
+              case Missing of
+                  [] -> ok;
+                  _ -> validation_error({missing_callbacks, Module, Behaviour, Missing})
+              end
+      end, InstanceBehaviours),
+    validate_gen_fun_capabilities(Module, Attributes, DeclaredBehaviours).
+
+validate_instance_metadata(
+  Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles) ->
+    case instance_metadata(Module, Attributes) of
+        legacy ->
+            ok;
+        {metadata, Instances} ->
+            DeclaredTypes = lists:usort(metadata_type_names(types(Attributes))),
+            lists:foreach(
+              fun(Instance) ->
+                      Type = maps:get(type, Instance),
+                      Typeclass = maps:get(typeclass, Instance),
+                      case lists:member(Type, DeclaredTypes) of
+                          true -> ok;
+                          false -> validation_error(
+                                     {undeclared_metadata_type, Module, Type})
+                      end,
+                      case ordsets:is_element(Typeclass, Typeclasses) andalso
+                           lists:member(Typeclass, DeclaredBehaviours) of
+                          true -> ok;
+                          false -> validation_error(
+                                     {undeclared_metadata_capability, Module, Typeclass})
+                      end,
+                      validate_dispatch_instance(Module, Instance, Beamfiles)
+              end, Instances)
+    end.
+
+validate_dispatch_instance(
+  Module, #{implementation := dispatch,
+            type := Type, typeclass := Typeclass} = Instance, Beamfiles) ->
+    Dispatch = maps:get(dispatch, Instance, #{}),
+    Functions = module_functions(Module, Beamfiles),
+    lists:foreach(
+      fun({Callback, Arity}) ->
+              case maps:find(Callback, Dispatch) of
+                  error ->
+                      validation_error(
+                        {missing_dispatch_callback, Module, Type, Typeclass,
+                         {Callback, Arity}});
+                  {ok, {Function, Arity}} ->
+                      case lists:member({Function, Arity}, Functions) of
+                          true -> ok;
+                          false ->
+                              validation_error(
+                                {missing_dispatch_adapter, Module, Type, Typeclass,
+                                 {Callback, Arity}, {Function, Arity}})
+                      end;
+                  {ok, Adapter} ->
+                      validation_error(
+                        {invalid_dispatch_adapter, Module, Type, Typeclass,
+                         {Callback, Arity}, Adapter})
+              end
+      end, required_callbacks(Typeclass, Beamfiles));
+validate_dispatch_instance(_Module, _Instance, _Beamfiles) ->
+    ok.
+
+module_functions(Module, Beamfiles) ->
+    Beamfile = module_beamfile(Module, Beamfiles),
+    case beam_lib:chunks(Beamfile, [abstract_code]) of
+        {ok, {Module, [{abstract_code, {raw_abstract_v1, Forms}}]}} ->
+            [{Name, Arity} || {function, _, Name, Arity, _} <- Forms];
+        {ok, {Module, [{abstract_code, no_abstract_code}]}} ->
+            validation_error({cannot_validate_dispatch, Module, no_abstract_code});
+        {error, beam_lib, Reason} ->
+            validation_error({cannot_validate_dispatch, Module, Reason})
+    end.
+
+instance_metadata(Module, Attributes) ->
+    Values = attribute_values(erlando_instance_meta, Attributes),
+    case Values of
+        [] ->
+            legacy;
+        _ ->
+            Metadata = [normalize_instance_metadata(Module, Value) || Value <- Values],
+            {metadata,
+             lists:append([maps:get(instances, Item, []) || Item <- Metadata])}
+    end.
+
+normalize_instance_metadata(Module, {1, Metadata}) when is_map(Metadata) ->
+    case maps:get(module, Metadata, Module) of
+        Module -> Metadata;
+        OtherModule -> validation_error(
+                         {instance_metadata_module_mismatch, Module, OtherModule})
+    end;
+normalize_instance_metadata(Module, {Version, _Metadata}) ->
+    validation_error({unsupported_instance_metadata_version, Module, Version});
+normalize_instance_metadata(Module, Metadata) ->
+    validation_error({invalid_instance_metadata, Module, Metadata}).
+
+attribute_values(Name, Attributes) ->
+    lists:append(
+      [case Value of
+           Values when is_list(Values) -> Values;
+           _ -> [Value]
+       end || Value <- proplists:get_all_values(Name, Attributes)]).
+
+metadata_type_names(TypeAttrs) ->
+    [case Type of
+         {Name, _UsedTypes} -> Name;
+         Name when is_atom(Name) -> Name
+     end || Type <- TypeAttrs].
+
+module_exports(Module, Beamfiles) ->
+    Beamfile = module_beamfile(Module, Beamfiles),
+    case beam_lib:chunks(Beamfile, [exports]) of
+        {ok, {Module, [{exports, Exports}]}} ->
+            Exports;
+        {error, beam_lib, Reason} ->
+            validation_error({cannot_read_exports, Module, Reason})
+    end.
+
+required_callbacks(Behaviour, Beamfiles) ->
+    Beamfile = module_beamfile(Behaviour, Beamfiles),
+    case callbacks_from_abstract_code(Behaviour, Beamfile) of
+        {ok, {Callbacks, OptionalCallbacks}} ->
+            lists:usort(Callbacks -- OptionalCallbacks);
+        {error, no_abstract_code} ->
+            callbacks_from_loaded_behaviour(Behaviour)
+    end.
+
+callbacks_from_abstract_code(Behaviour, Beamfile) ->
+    case beam_lib:chunks(Beamfile, [abstract_code]) of
+        {ok, {Behaviour, [{abstract_code, {raw_abstract_v1, Forms}}]}} ->
+            Callbacks =
+                [Function || {attribute, _, callback, {Function, _}} <- Forms],
+            Optional =
+                lists:append(
+                  [Functions || {attribute, _, optional_callbacks, Functions} <- Forms]),
+            {ok, {Callbacks, Optional}};
+        {ok, {Behaviour, [{abstract_code, no_abstract_code}]}} ->
+            {error, no_abstract_code};
+        {error, beam_lib, Reason} ->
+            validation_error({cannot_read_callbacks, Behaviour, Reason})
+    end.
+
+callbacks_from_loaded_behaviour(Behaviour) ->
+    try Behaviour:behaviour_info(callbacks) of
+        Callbacks ->
+            Optional =
+                try Behaviour:behaviour_info(optional_callbacks) of
+                    OptionalCallbacks when is_list(OptionalCallbacks) -> OptionalCallbacks;
+                    _ -> []
+                catch
+                    _:_ -> []
+                end,
+            lists:usort(Callbacks -- Optional)
+    catch
+        _:_ -> validation_error({cannot_read_callbacks, Behaviour, no_abstract_code})
+    end.
+
+module_beamfile(Module, Beamfiles) ->
+    case maps:find(Module, Beamfiles) of
+        {ok, Beamfile} -> Beamfile;
+        error -> validation_error({missing_beamfile, Module})
+    end.
+
+validate_gen_fun_capabilities(Module, Attributes, DeclaredBehaviours) ->
+    GenFunOptions = gen_fun_options(Module, Attributes),
+    Referenced = lists:usort(lists:append([gen_fun_capabilities(Opts) || Opts <- GenFunOptions])),
+    Missing = Referenced -- DeclaredBehaviours,
+    case Missing of
+        [] -> ok;
+        _ -> validation_error({undeclared_gen_fun_capabilities, Module, Missing})
+    end.
+
+gen_fun_options(Module, Attributes) ->
+    Legacy = lists:flatten(proplists:get_all_values(gen_fun, Attributes)),
+    Retained =
+        [normalize_gen_fun_metadata(Module, Metadata)
+         || Metadata <- attribute_values(gen_fun_meta, Attributes)],
+    Legacy ++ Retained.
+
+normalize_gen_fun_metadata(_Module, {1, Options}) when is_map(Options) ->
+    Options;
+normalize_gen_fun_metadata(Module, {Version, _Options}) ->
+    validation_error({unsupported_gen_fun_metadata_version, Module, Version});
+normalize_gen_fun_metadata(Module, Metadata) ->
+    validation_error({invalid_gen_fun_metadata, Module, Metadata}).
+
+gen_fun_capabilities(Opts) when is_map(Opts) ->
+    maps:get(behaviours, Opts, []) ++ maps:get(tbehaviours, Opts, []);
+gen_fun_capabilities(_Opts) ->
+    [].
+
+merge_behaviour_modules(BehaviourModules, NewBehaviourModules) ->
+    maps:fold(
+      fun(Key, Module, Acc) ->
+              case maps:find(Key, Acc) of
+                  {ok, Module} ->
+                      Acc;
+                  {ok, ExistingModule} ->
+                      validation_error(
+                        {conflicting_instance, Key, ExistingModule, Module});
+                  error ->
+                      maps:put(Key, Module, Acc)
+              end
+      end, BehaviourModules, NewBehaviourModules).
+
+validation_error(Reason) ->
+    erlang:error({erlando_validation, Reason}).
 
 compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = BehaviourModules}) ->
     TypeclassModule = {attribute,0,module,typeclass},
@@ -274,20 +496,33 @@ module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion) -
                   end
           end, maps:new(), TypeAttrs),
     Types = maps:keys(TypeInstanceMap),
-    TypeBehaviourMap = 
-        lists:foldl(
-          fun(Type, Acc1) ->
-                  lists:foldl(
-                    fun(Behaviour, Acc2) ->
-                            case ordsets:is_element(Behaviour, Typeclasses) of
-                                true ->
-                                    maps:put({Type, Behaviour}, Module, Acc2);
-                                false ->
-                                    Acc2
-                            end
-                    end, Acc1, Behaviours)
-          end, maps:new(), Types),
+    TypeBehaviourMap =
+        case instance_metadata(Module, Attributes) of
+            legacy ->
+                legacy_type_behaviour_map(Module, Types, Behaviours, Typeclasses);
+            {metadata, Instances} ->
+                lists:foldl(
+                  fun(Instance, Acc) ->
+                          Type = maps:get(type, Instance),
+                          Behaviour = maps:get(typeclass, Instance),
+                          maps:put({Type, Behaviour}, Module, Acc)
+                  end, maps:new(), Instances)
+        end,
     {TypeInstanceMap, TypeBehaviourMap}.
+
+legacy_type_behaviour_map(Module, Types, Behaviours, Typeclasses) ->
+    lists:foldl(
+      fun(Type, Acc1) ->
+              lists:foldl(
+                fun(Behaviour, Acc2) ->
+                        case ordsets:is_element(Behaviour, Typeclasses) of
+                            true ->
+                                maps:put({Type, Behaviour}, Module, Acc2);
+                            false ->
+                                Acc2
+                        end
+                end, Acc1, Behaviours)
+      end, maps:new(), Types).
 
 merge_type_instance(TypeInstanceMap, NTypeInstanceMap) ->
     maps:fold(
