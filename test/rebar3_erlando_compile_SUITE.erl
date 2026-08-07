@@ -1,8 +1,39 @@
--module(rebar3_erlando_compile_tests).
+-module(rebar3_erlando_compile_SUITE).
 
--include_lib("eunit/include/eunit.hrl").
+%% API
+-export([all/0]).
 
-t_from_form_site_test() ->
+%% Test cases
+-export([t_from_form_site/1,
+         legacy_mapping_characterization/1,
+         identical_mapping_is_deduplicated/1,
+         conflicting_mapping_fails/1,
+         missing_required_callback_fails/1,
+         optional_callback_is_not_required/1,
+         undeclared_gen_fun_capability_fails/1,
+         retained_gen_fun_metadata_is_validated/1,
+         unknown_gen_fun_metadata_version_fails/1,
+         metadata_defines_exact_mappings/1,
+         unknown_metadata_version_fails/1,
+         missing_dispatch_callback_fails/1,
+         missing_dispatch_adapter_fails/1]).
+
+all() ->
+    [t_from_form_site,
+     legacy_mapping_characterization,
+     identical_mapping_is_deduplicated,
+     conflicting_mapping_fails,
+     missing_required_callback_fails,
+     optional_callback_is_not_required,
+     undeclared_gen_fun_capability_fails,
+     retained_gen_fun_metadata_is_validated,
+     unknown_gen_fun_metadata_version_fails,
+     metadata_defines_exact_mappings,
+     unknown_metadata_version_fails,
+     missing_dispatch_callback_fails,
+     missing_dispatch_adapter_fails].
+
+t_from_form_site(_Config) ->
     Module = rebar3_erlando_test_type,
     Forms = [
         {attribute, 1, module, Module},
@@ -21,12 +52,13 @@ t_from_form_site_test() ->
             rebar3_erlando_compile:add_modules(
               [], [{Module, Attributes}], #{Module => BeamFile},
               rebar3_erlando_compile:new()),
-        ?assertMatch({ok, typeclass, _}, rebar3_erlando_compile:compile(State))
+        {ok, typeclass, _} = rebar3_erlando_compile:compile(State),
+        ok
     after
         ok = file:delete(BeamFile)
     end.
 
-legacy_mapping_characterization_test() ->
+legacy_mapping_characterization(_Config) ->
     Typeclass = test_functor,
     Instance = test_identity,
     with_beams(
@@ -36,12 +68,13 @@ legacy_mapping_characterization_test() ->
               State = add_fixture_modules(Typeclass, [Instance], Beamfiles),
               {ok, typeclass, Beam} = rebar3_erlando_compile:compile(State),
               {module, typeclass} = code:load_binary(typeclass, "typeclass.beam", Beam),
-              ?assertEqual(Instance, typeclass:module(sample, Typeclass)),
-              ?assertEqual(sample, typeclass:type({sample, value})),
-              ?assert(typeclass:is_typeclass(Typeclass))
+              Instance = typeclass:module(sample, Typeclass),
+              sample = typeclass:type({sample, value}),
+              true = typeclass:is_typeclass(Typeclass),
+              ok
       end).
 
-identical_mapping_is_deduplicated_test() ->
+identical_mapping_is_deduplicated(_Config) ->
     Typeclass = test_duplicate_capability,
     Instance = test_duplicate_instance,
     with_beams(
@@ -52,10 +85,11 @@ identical_mapping_is_deduplicated_test() ->
               Attributes = beam_attributes(Instance, Beamfiles),
               State1 = rebar3_erlando_compile:add_modules(
                          [], [{Instance, Attributes}], #{}, State0),
-              ?assertMatch({ok, typeclass, _}, rebar3_erlando_compile:compile(State1))
+              {ok, typeclass, _} = rebar3_erlando_compile:compile(State1),
+              ok
       end).
 
-conflicting_mapping_fails_test() ->
+conflicting_mapping_fails(_Config) ->
     Typeclass = test_conflict_capability,
     First = test_conflict_first,
     Second = test_conflict_second,
@@ -64,26 +98,26 @@ conflicting_mapping_fails_test() ->
        {First, instance_forms(First, conflict_type, [Typeclass], [{run, 1}])},
        {Second, instance_forms(Second, conflict_type, [Typeclass], [{run, 1}])}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {conflicting_instance, {conflict_type, Typeclass}, First, Second}},
-                 add_fixture_modules(Typeclass, [First, Second], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {conflicting_instance, {conflict_type, Typeclass}, First, Second}},
+                fun() -> add_fixture_modules(Typeclass, [First, Second], Beamfiles) end)
       end).
 
-missing_required_callback_fails_test() ->
+missing_required_callback_fails(_Config) ->
     Typeclass = test_required_capability,
     Instance = test_missing_callback_instance,
     with_beams(
       [{Typeclass, typeclass_forms(Typeclass, [{required, 1}], [])},
        {Instance, instance_forms(Instance, missing_callback_type, [Typeclass], [])}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {missing_callbacks, Instance, Typeclass, [{required, 1}]}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {missing_callbacks, Instance, Typeclass, [{required, 1}]}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
 
-optional_callback_is_not_required_test() ->
+optional_callback_is_not_required(_Config) ->
     Typeclass = test_optional_capability,
     Instance = test_optional_instance,
     with_beams(
@@ -93,10 +127,11 @@ optional_callback_is_not_required_test() ->
         instance_forms(Instance, optional_type, [Typeclass], [{required, 1}])}],
       fun(Beamfiles) ->
               State = add_fixture_modules(Typeclass, [Instance], Beamfiles),
-              ?assertMatch({ok, typeclass, _}, rebar3_erlando_compile:compile(State))
+              {ok, typeclass, _} = rebar3_erlando_compile:compile(State),
+              ok
       end).
 
-undeclared_gen_fun_capability_fails_test() ->
+undeclared_gen_fun_capability_fails(_Config) ->
     Typeclass = test_gen_fun_capability,
     Instance = test_gen_fun_instance,
     with_beams(
@@ -107,15 +142,17 @@ undeclared_gen_fun_capability_fails_test() ->
               Attributes = [{gen_fun, [#{behaviours => [undeclared_capability]}]} |
                             Attributes0],
               ModuleMap = maps:with([Typeclass, Instance], Beamfiles),
-              ?assertError(
-                 {erlando_validation,
-                  {undeclared_gen_fun_capabilities, Instance, [undeclared_capability]}},
-                 rebar3_erlando_compile:add_modules(
-                   [Typeclass], [{Instance, Attributes}], ModuleMap,
-                   rebar3_erlando_compile:new()))
+              assert_error(
+                {erlando_validation,
+                 {undeclared_gen_fun_capabilities, Instance, [undeclared_capability]}},
+                fun() ->
+                        rebar3_erlando_compile:add_modules(
+                          [Typeclass], [{Instance, Attributes}], ModuleMap,
+                          rebar3_erlando_compile:new())
+                end)
       end).
 
-retained_gen_fun_metadata_is_validated_test() ->
+retained_gen_fun_metadata_is_validated(_Config) ->
     Typeclass = test_retained_gen_fun_capability,
     Instance = test_retained_gen_fun_instance,
     Forms =
@@ -130,13 +167,13 @@ retained_gen_fun_metadata_is_validated_test() ->
       [{Typeclass, typeclass_forms(Typeclass, [{run, 1}], [])},
        {Instance, Forms}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {undeclared_gen_fun_capabilities, Instance, [undeclared_capability]}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {undeclared_gen_fun_capabilities, Instance, [undeclared_capability]}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
 
-unknown_gen_fun_metadata_version_fails_test() ->
+unknown_gen_fun_metadata_version_fails(_Config) ->
     Typeclass = test_gen_fun_version_capability,
     Instance = test_gen_fun_version_instance,
     Forms =
@@ -150,13 +187,13 @@ unknown_gen_fun_metadata_version_fails_test() ->
       [{Typeclass, typeclass_forms(Typeclass, [{run, 1}], [])},
        {Instance, Forms}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {unsupported_gen_fun_metadata_version, Instance, 99}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {unsupported_gen_fun_metadata_version, Instance, 99}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
 
-metadata_defines_exact_mappings_test() ->
+metadata_defines_exact_mappings(_Config) ->
     FirstClass = test_metadata_first_capability,
     SecondClass = test_metadata_second_capability,
     Instance = test_metadata_instance,
@@ -189,15 +226,16 @@ metadata_defines_exact_mappings_test() ->
                         rebar3_erlando_compile:new()),
               {ok, typeclass, Beam} = rebar3_erlando_compile:compile(State),
               {module, typeclass} = code:load_binary(typeclass, "typeclass.beam", Beam),
-              ?assertEqual(Instance, typeclass:module(first_metadata_type, FirstClass)),
-              ?assertEqual(Instance, typeclass:module(second_metadata_type, SecondClass)),
-              ?assertExit({unregisted_module, {first_metadata_type, SecondClass}},
-                          typeclass:module(first_metadata_type, SecondClass)),
-              ?assertExit({unregisted_module, {second_metadata_type, FirstClass}},
-                          typeclass:module(second_metadata_type, FirstClass))
+              Instance = typeclass:module(first_metadata_type, FirstClass),
+              Instance = typeclass:module(second_metadata_type, SecondClass),
+              assert_exit({unregisted_module, {first_metadata_type, SecondClass}},
+                          fun() -> typeclass:module(first_metadata_type, SecondClass) end),
+              assert_exit({unregisted_module, {second_metadata_type, FirstClass}},
+                          fun() -> typeclass:module(second_metadata_type, FirstClass) end),
+              ok
       end).
 
-unknown_metadata_version_fails_test() ->
+unknown_metadata_version_fails(_Config) ->
     Typeclass = test_metadata_version_capability,
     Instance = test_metadata_version_instance,
     Forms =
@@ -211,13 +249,13 @@ unknown_metadata_version_fails_test() ->
       [{Typeclass, typeclass_forms(Typeclass, [{run, 1}], [])},
        {Instance, Forms}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {unsupported_instance_metadata_version, Instance, 99}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {unsupported_instance_metadata_version, Instance, 99}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
 
-missing_dispatch_callback_fails_test() ->
+missing_dispatch_callback_fails(_Config) ->
     Typeclass = test_dispatch_coverage_capability,
     Instance = test_dispatch_coverage_instance,
     Metadata =
@@ -234,14 +272,14 @@ missing_dispatch_callback_fails_test() ->
       [{Typeclass, typeclass_forms(Typeclass, [{run, 1}], [])},
        {Instance, Forms}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {missing_dispatch_callback, Instance, dispatch_coverage_type,
-                   Typeclass, {run, 1}}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {missing_dispatch_callback, Instance, dispatch_coverage_type,
+                  Typeclass, {run, 1}}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
 
-missing_dispatch_adapter_fails_test() ->
+missing_dispatch_adapter_fails(_Config) ->
     Typeclass = test_dispatch_adapter_capability,
     Instance = test_dispatch_adapter_instance,
     Metadata =
@@ -258,12 +296,40 @@ missing_dispatch_adapter_fails_test() ->
       [{Typeclass, typeclass_forms(Typeclass, [{run, 1}], [])},
        {Instance, Forms}],
       fun(Beamfiles) ->
-              ?assertError(
-                 {erlando_validation,
-                  {missing_dispatch_adapter, Instance, dispatch_adapter_type,
-                   Typeclass, {run, 1}, {missing_adapter, 1}}},
-                 add_fixture_modules(Typeclass, [Instance], Beamfiles))
+              assert_error(
+                {erlando_validation,
+                 {missing_dispatch_adapter, Instance, dispatch_adapter_type,
+                  Typeclass, {run, 1}, {missing_adapter, 1}}},
+                fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
       end).
+
+%%--------------------------------------------------------------------
+%% Internal functions
+%%--------------------------------------------------------------------
+
+assert_error(Expected, Fun) ->
+    try Fun() of
+        _ -> ct:fail({expected_error, Expected, got_success})
+    catch
+        error:Expected ->
+            ok;
+        error:Other ->
+            ct:fail({expected_error, Expected, other_error, Other});
+        Class:Other ->
+            ct:fail({expected_error, Expected, other, Class, Other})
+    end.
+
+assert_exit(Expected, Fun) ->
+    try Fun() of
+        _ -> ct:fail({expected_exit, Expected, got_success})
+    catch
+        exit:Expected ->
+            ok;
+        exit:Other ->
+            ct:fail({expected_exit, Expected, other_exit, Other});
+        Class:Other ->
+            ct:fail({expected_exit, Expected, other, Class, Other})
+    end.
 
 add_fixture_modules(Typeclass, Instances, Beamfiles) ->
     Types = [{Instance, beam_attributes(Instance, Beamfiles)} || Instance <- Instances],

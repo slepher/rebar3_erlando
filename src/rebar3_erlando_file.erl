@@ -28,7 +28,7 @@ fold_beams(Fun, Init, Path) ->
                                _ ->
                                    Acc
                            end
-                   end, Init, Filenames)};
+                   end, Init, lists:sort(Filenames))};
         {error, Reason} ->
             {error, Reason}
     end.
