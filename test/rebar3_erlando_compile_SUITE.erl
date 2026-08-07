@@ -16,7 +16,8 @@
          metadata_defines_exact_mappings/1,
          unknown_metadata_version_fails/1,
          missing_dispatch_callback_fails/1,
-         missing_dispatch_adapter_fails/1]).
+         missing_dispatch_adapter_fails/1,
+         function_type_patterns_classify_fun_values/1]).
 
 all() ->
     [t_from_form_site,
@@ -31,7 +32,8 @@ all() ->
      metadata_defines_exact_mappings,
      unknown_metadata_version_fails,
      missing_dispatch_callback_fails,
-     missing_dispatch_adapter_fails].
+     missing_dispatch_adapter_fails,
+     function_type_patterns_classify_fun_values].
 
 t_from_form_site(_Config) ->
     Module = rebar3_erlando_test_type,
@@ -301,6 +303,51 @@ missing_dispatch_adapter_fails(_Config) ->
                  {missing_dispatch_adapter, Instance, dispatch_adapter_type,
                   Typeclass, {run, 1}, {missing_adapter, 1}}},
                 fun() -> add_fixture_modules(Typeclass, [Instance], Beamfiles) end)
+      end).
+
+%% Compatibility regression: the typeclass registry must classify real fun
+%% values as the `function` type. Lenses declares a bare `function` type
+%% (lenses_function) while erlando declares it with a reference to a fun type
+%% definition (function_instance). When the bare declaration is scanned first,
+%% the merged type pattern must still match fun values; otherwise runtime
+%% dispatch falls back to undetermined records and consumers fail with
+%% badfun (e.g. lenses getter:view). Reproduces the rebar3_erlando 0.4.0
+%% registry-generation regression introduced by commit 44ce586.
+function_type_patterns_classify_fun_values(_Config) ->
+    BareClass = test_function_bare_capability,
+    RefClass = test_function_ref_capability,
+    BareInstance = test_function_bare_instance,
+    RefInstance = test_function_ref_instance,
+    BareForms =
+        [{attribute, 1, module, BareInstance},
+         {attribute, 1, erlando_type, function},
+         {attribute, 1, behaviour, BareClass},
+         {attribute, 1, export, [{run, 1}]},
+         function_form({run, 1})],
+    FunType = {type, 1, 'fun',
+               [{type, 1, product, [{type, 1, any, []}]}, {type, 1, any, []}]},
+    RefForms =
+        [{attribute, 1, module, RefInstance},
+         {attribute, 1, erlando_type, {function, [{function_instance, 0}]}},
+         {attribute, 1, type, {function_instance, FunType, []}},
+         {attribute, 1, behaviour, RefClass},
+         {attribute, 1, export, [{run, 1}]},
+         function_form({run, 1})],
+    with_beams(
+      [{BareClass, typeclass_forms(BareClass, [{run, 1}], [])},
+       {RefClass, typeclass_forms(RefClass, [{run, 1}], [])},
+       {BareInstance, BareForms},
+       {RefInstance, RefForms}],
+      fun(Beamfiles) ->
+              Types = [{BareInstance, beam_attributes(BareInstance, Beamfiles)},
+                       {RefInstance, beam_attributes(RefInstance, Beamfiles)}],
+              State = rebar3_erlando_compile:add_modules(
+                        [BareClass, RefClass], Types, Beamfiles,
+                        rebar3_erlando_compile:new()),
+              {ok, typeclass, Beam} = rebar3_erlando_compile:compile(State),
+              {module, typeclass} = code:load_binary(typeclass, "typeclass.beam", Beam),
+              function = typeclass:type(fun() -> ok end),
+              ok
       end).
 
 %%--------------------------------------------------------------------

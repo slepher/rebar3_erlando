@@ -68,14 +68,7 @@ add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
         module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion),
     NTypes = merge_type_instance(Types, TypeInstanceMap),
     NBehaviourModules = merge_behaviour_modules(BehaviourModules, TypeBehaviourModuleMap),
-    NNTypes = 
-        maps:map(
-          fun(Type, undefined) ->
-                  [{tuple,[{atom, Type},any]}];
-             (_Type, Patterns) ->
-                  Patterns
-          end, NTypes),
-    State#state{behaviour_modules = NBehaviourModules, types = NNTypes}.
+    State#state{behaviour_modules = NBehaviourModules, types = NTypes}.
 
 validate_module(Module, Attributes, Typeclasses, Beamfiles) ->
     DeclaredBehaviours = lists:usort(behaviours(Attributes) ++ erlando_behaviours(Attributes)),
@@ -299,7 +292,14 @@ validation_error(Reason) ->
 compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = BehaviourModules}) ->
     TypeclassModule = {attribute,0,module,typeclass},
     Export = {attribute,0,export,[{module,2}, {is_typeclass, 1}, {type, 1}]},
-    TypesFun = generate_type(Types),
+    ResolvedTypes =
+        maps:map(
+          fun(Type, undefined) ->
+                  [{tuple,[{atom, Type},any]}];
+             (_Type, Patterns) ->
+                  Patterns
+          end, Types),
+    TypesFun = generate_type(ResolvedTypes),
     IsTypeClass = generate_is_typeclass(Typeclasses),
     Module = generate_module(BehaviourModules),
     compile:forms([TypeclassModule, Export, TypesFun, IsTypeClass, Module], [debug_info]).
