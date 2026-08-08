@@ -25,11 +25,39 @@ init(State) ->
                                  {desc, "Compile erlydtl templates."},
                                  {opts, []}]),
     State1 = rebar_state:add_provider(State, Provider),
-    {ok, State1}.
+    State2 = inject_compile_hook(State1),
+    {ok, State2}.
+
+%% The post-compile hook is injected into the project state so the
+%% typeclass registry is rebuilt once per build, after every app (deps
+%% and project apps) has been compiled.  Projects do not need to
+%% declare the hook themselves.
+inject_compile_hook(State) ->
+    Hooks0 = rebar_state:get(State, provider_hooks, []),
+    PostHooks = proplists:get_value(post, Hooks0, []),
+    Hook = {compile, {erlando, ?PROVIDER}},
+    case lists:member(Hook, PostHooks) of
+        true ->
+            State;
+        false ->
+            Hooks1 = [{post, PostHooks ++ [Hook]} | proplists:delete(post, Hooks0)],
+            rebar_state:set(State, provider_hooks, Hooks1)
+    end.
 
 do(State) ->
-    App = rebar_state:current_app(State),
-    AppName = rebar_app_info:name(App),
+    case rebar_state:current_app(State) of
+        undefined ->
+            %% Project-wide hook execution: the whole build has been
+            %% compiled, rebuild the registry once and write
+            %% typeclass.beam.
+            do_compile(State);
+        _App ->
+            %% Per-app hook execution: the project-wide execution will
+            %% rebuild the registry, nothing to do here.
+            {ok, State}
+    end.
+
+do_compile(State) ->
     AppInfos = rebar_state:project_apps(State),
     Deps = rebar_state:all_deps(State),
     AllAppInfos = Deps ++ AppInfos,
@@ -39,36 +67,24 @@ do(State) ->
                    Name == <<"erlando">>
            end, AllAppInfos) of
         [ErlandoApp] ->
-            case App of
-                undefined ->
-                    ok;
-                _ ->
-                    rebar_api:info("Running erlando compile for ~s...", [AppName]),
-                    case match_modules(State, AllAppInfos, AppInfos) of
-                        {ok, {Typeclasses, Types, ModuleMap}} ->
-                            ErlandoState =
-                                rebar3_erlando_compile:add_modules(
-                                  Typeclasses, Types, ModuleMap,
-                                  rebar3_erlando_compile:new()),
-                            write_beam(AppName, ErlandoState, ErlandoApp);
-                        {error, _Reason} ->
-                            ok
-                    end,
-                    {ok, State}
-            end;
-        [] ->
-            case AppName of
-                <<"astranaut">> ->
-                    ok;
-                _ ->
-                    rebar_api:warn("erlando app is not included in project, why use rebar3_erlando to compile?", [])
+            rebar_api:info("Running erlando compile...", []),
+            case match_modules(State, AllAppInfos, AppInfos) of
+                {ok, {Typeclasses, Types, ModuleMap}} ->
+                    ErlandoState =
+                        rebar3_erlando_compile:add_modules(
+                          Typeclasses, Types, ModuleMap,
+                          rebar3_erlando_compile:new()),
+                    write_beam(ErlandoState, ErlandoApp);
+                {error, _Reason} ->
+                    ok
             end,
+            {ok, State};
+        [] ->
+            rebar_api:warn("erlando app is not included in project, why use rebar3_erlando to compile?", []),
             {ok, State}
     end.
 
-write_beam(<<"astranaut">>, _ErlandoState, _ErlandoApp) ->
-    ok;
-write_beam(_AppName, ErlandoState, ErlandoApp) ->
+write_beam(ErlandoState, ErlandoApp) ->
     {ok, _Module, Bin} = rebar3_erlando_compile:compile(ErlandoState),
     OutDir = rebar_app_info:out_dir(ErlandoApp),
     ok = file:write_file(filename:join(OutDir, "ebin/typeclass.beam"), Bin).
