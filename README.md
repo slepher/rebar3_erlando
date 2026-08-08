@@ -12,14 +12,15 @@ add command for erlando
 
 typeclass.beam is now generated compile time by rebar3_erlando rebar3 plugin
 
-if you want to use the typeclass system through `-superclass`,
-`-erlando_instance` or the legacy `-erlando_type/-behaviour` attributes, add
+Since 0.4.0 the plugin injects the post-compile hook
+{post, [{compile, {erlando, compile}}]} into the project state on init,
+so projects do not need to declare the hook themselves; the hook runs
+once per build (project-wide) and writes the generated typeclass.beam to
+the erlando app's out_dir. Per-app hook executions are no-ops.
 
-    {provider_hooks, [{post, [{compile, {erlando, compile}}]}]}.
-    
-to rebar.config in your project
-
-otherwise, rebar.config in project which deps on erlando is no need to change.
+The typeclass registry is rebuilt from all deps' beams on every compile
+instead of accumulating state between builds, so repeated compiles keep
+the registry correct.
 
 erlando_typeclass:register_application/1 is nolonger used.
 
