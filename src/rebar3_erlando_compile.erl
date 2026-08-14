@@ -11,21 +11,21 @@
 %% API
 -export([new/0, add_modules/4, compile/1]).
 
--record(state, {otp_version,
-                behaviour_modules = maps:new(), 
-                typeclasses = [],
-                type_aliases = [], 
-                types = maps:new(),
-                exported_types = sets:new(), 
-                mod_recs = dict:new(),
-                beamfiles = maps:new()
-               }).
+-record(state, {
+    otp_version,
+    behaviour_modules = maps:new(),
+    typeclasses = [],
+    type_aliases = [],
+    types = maps:new(),
+    exported_types = sets:new(),
+    mod_recs = dict:new(),
+    beamfiles = maps:new()
+}).
 
--record(cache,
-        {
-          types = maps:new(),
-          mod_recs = {mrecs, dict:new()}
-        }).
+-record(cache, {
+    types = maps:new(),
+    mod_recs = {mrecs, dict:new()}
+}).
 
 %%%===================================================================
 %%% API
@@ -49,22 +49,29 @@ add_module(Module, Beamfile, #state{exported_types = ETypes, mod_recs = ModRecs}
     State1 = State#state{beamfiles = maps:put(Module, Beamfile, State#state.beamfiles)},
     case get_core_from_beam(Beamfile) of
         {ok, {OtpVersion, Core, AbsOrCore}} ->
-            {NETypes, NModRecs} = 
+            {NETypes, NModRecs} =
                 update_types_and_rec_map(Module, Core, AbsOrCore, ETypes, ModRecs),
             State1#state{exported_types = NETypes, mod_recs = NModRecs, otp_version = OtpVersion};
         {error, _Reason} ->
             State1
     end.
-                  
-% add typeclass first 
+
+% add typeclass first
 % then add type
-add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
-                                          typeclasses = Typeclasses, types = Types, 
-                                          exported_types = ETypes, mod_recs = ModRecs,
-                                          otp_version = OtpVersion,
-                                          beamfiles = Beamfiles} = State) ->
+add_instance(
+    {Module, Attributes},
+    #state{
+        behaviour_modules = BehaviourModules,
+        typeclasses = Typeclasses,
+        types = Types,
+        exported_types = ETypes,
+        mod_recs = ModRecs,
+        otp_version = OtpVersion,
+        beamfiles = Beamfiles
+    } = State
+) ->
     validate_module(Module, Attributes, Typeclasses, Beamfiles),
-    {TypeInstanceMap, TypeBehaviourModuleMap} = 
+    {TypeInstanceMap, TypeBehaviourModuleMap} =
         module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion),
     NTypes = merge_type_instance(Types, TypeInstanceMap),
     NBehaviourModules = merge_behaviour_modules(BehaviourModules, TypeBehaviourModuleMap),
@@ -73,74 +80,102 @@ add_instance({Module, Attributes}, #state{behaviour_modules = BehaviourModules,
 validate_module(Module, Attributes, Typeclasses, Beamfiles) ->
     DeclaredBehaviours = lists:usort(behaviours(Attributes) ++ erlando_behaviours(Attributes)),
     InstanceBehaviours =
-        [Behaviour || Behaviour <- DeclaredBehaviours,
-                      ordsets:is_element(Behaviour, Typeclasses)],
+        [
+            Behaviour
+         || Behaviour <- DeclaredBehaviours,
+            ordsets:is_element(Behaviour, Typeclasses)
+        ],
     validate_instance_metadata(
-      Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles),
+        Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles
+    ),
     Exports = module_exports(Module, Beamfiles),
     lists:foreach(
-      fun(Behaviour) ->
-              Required = required_callbacks(Behaviour, Beamfiles),
-              Missing = Required -- Exports,
-              case Missing of
-                  [] -> ok;
-                  _ -> validation_error({missing_callbacks, Module, Behaviour, Missing})
-              end
-      end, InstanceBehaviours),
+        fun(Behaviour) ->
+            Required = required_callbacks(Behaviour, Beamfiles),
+            Missing = Required -- Exports,
+            case Missing of
+                [] -> ok;
+                _ -> validation_error({missing_callbacks, Module, Behaviour, Missing})
+            end
+        end,
+        InstanceBehaviours
+    ),
     validate_gen_fun_capabilities(Module, Attributes, DeclaredBehaviours).
 
 validate_instance_metadata(
-  Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles) ->
+    Module, Attributes, Typeclasses, DeclaredBehaviours, Beamfiles
+) ->
     case instance_metadata(Module, Attributes) of
         legacy ->
             ok;
         {metadata, Instances} ->
             DeclaredTypes = lists:usort(metadata_type_names(types(Attributes))),
             lists:foreach(
-              fun(Instance) ->
-                      Type = maps:get(type, Instance),
-                      Typeclass = maps:get(typeclass, Instance),
-                      case lists:member(Type, DeclaredTypes) of
-                          true -> ok;
-                          false -> validation_error(
-                                     {undeclared_metadata_type, Module, Type})
-                      end,
-                      case ordsets:is_element(Typeclass, Typeclasses) andalso
-                           lists:member(Typeclass, DeclaredBehaviours) of
-                          true -> ok;
-                          false -> validation_error(
-                                     {undeclared_metadata_capability, Module, Typeclass})
-                      end,
-                      validate_dispatch_instance(Module, Instance, Beamfiles)
-              end, Instances)
+                fun(Instance) ->
+                    Type = maps:get(type, Instance),
+                    Typeclass = maps:get(typeclass, Instance),
+                    case lists:member(Type, DeclaredTypes) of
+                        true ->
+                            ok;
+                        false ->
+                            validation_error(
+                                {undeclared_metadata_type, Module, Type}
+                            )
+                    end,
+                    case
+                        ordsets:is_element(Typeclass, Typeclasses) andalso
+                            lists:member(Typeclass, DeclaredBehaviours)
+                    of
+                        true ->
+                            ok;
+                        false ->
+                            validation_error(
+                                {undeclared_metadata_capability, Module, Typeclass}
+                            )
+                    end,
+                    validate_dispatch_instance(Module, Instance, Beamfiles)
+                end,
+                Instances
+            )
     end.
 
 validate_dispatch_instance(
-  Module, #{implementation := dispatch,
-            type := Type, typeclass := Typeclass} = Instance, Beamfiles) ->
+    Module,
+    #{
+        implementation := dispatch,
+        type := Type,
+        typeclass := Typeclass
+    } = Instance,
+    Beamfiles
+) ->
     Dispatch = maps:get(dispatch, Instance, #{}),
     Functions = module_functions(Module, Beamfiles),
     lists:foreach(
-      fun({Callback, Arity}) ->
-              case maps:find(Callback, Dispatch) of
-                  error ->
-                      validation_error(
-                        {missing_dispatch_callback, Module, Type, Typeclass,
-                         {Callback, Arity}});
-                  {ok, {Function, Arity}} ->
-                      case lists:member({Function, Arity}, Functions) of
-                          true -> ok;
-                          false ->
-                              validation_error(
+        fun({Callback, Arity}) ->
+            case maps:find(Callback, Dispatch) of
+                error ->
+                    validation_error(
+                        {missing_dispatch_callback, Module, Type, Typeclass, {Callback, Arity}}
+                    );
+                {ok, {Function, Arity}} ->
+                    case lists:member({Function, Arity}, Functions) of
+                        true ->
+                            ok;
+                        false ->
+                            validation_error(
                                 {missing_dispatch_adapter, Module, Type, Typeclass,
-                                 {Callback, Arity}, {Function, Arity}})
-                      end;
-                  {ok, Adapter} ->
-                      validation_error(
-                        {invalid_dispatch_adapter, Module, Type, Typeclass,
-                         {Callback, Arity}, Adapter})
-              end
-      end, required_callbacks(Typeclass, Beamfiles));
+                                    {Callback, Arity}, {Function, Arity}}
+                            )
+                    end;
+                {ok, Adapter} ->
+                    validation_error(
+                        {invalid_dispatch_adapter, Module, Type, Typeclass, {Callback, Arity},
+                            Adapter}
+                    )
+            end
+        end,
+        required_callbacks(Typeclass, Beamfiles)
+    );
 validate_dispatch_instance(_Module, _Instance, _Beamfiles) ->
     ok.
 
@@ -162,15 +197,17 @@ instance_metadata(Module, Attributes) ->
             legacy;
         _ ->
             Metadata = [normalize_instance_metadata(Module, Value) || Value <- Values],
-            {metadata,
-             lists:append([maps:get(instances, Item, []) || Item <- Metadata])}
+            {metadata, lists:append([maps:get(instances, Item, []) || Item <- Metadata])}
     end.
 
 normalize_instance_metadata(Module, {1, Metadata}) when is_map(Metadata) ->
     case maps:get(module, Metadata, Module) of
-        Module -> Metadata;
-        OtherModule -> validation_error(
-                         {instance_metadata_module_mismatch, Module, OtherModule})
+        Module ->
+            Metadata;
+        OtherModule ->
+            validation_error(
+                {instance_metadata_module_mismatch, Module, OtherModule}
+            )
     end;
 normalize_instance_metadata(Module, {Version, _Metadata}) ->
     validation_error({unsupported_instance_metadata_version, Module, Version});
@@ -179,16 +216,23 @@ normalize_instance_metadata(Module, Metadata) ->
 
 attribute_values(Name, Attributes) ->
     lists:append(
-      [case Value of
-           Values when is_list(Values) -> Values;
-           _ -> [Value]
-       end || Value <- proplists:get_all_values(Name, Attributes)]).
+        [
+            case Value of
+                Values when is_list(Values) -> Values;
+                _ -> [Value]
+            end
+         || Value <- proplists:get_all_values(Name, Attributes)
+        ]
+    ).
 
 metadata_type_names(TypeAttrs) ->
-    [case Type of
-         {Name, _UsedTypes} -> Name;
-         Name when is_atom(Name) -> Name
-     end || Type <- TypeAttrs].
+    [
+        case Type of
+            {Name, _UsedTypes} -> Name;
+            Name when is_atom(Name) -> Name
+        end
+     || Type <- TypeAttrs
+    ].
 
 module_exports(Module, Beamfiles) ->
     Beamfile = module_beamfile(Module, Beamfiles),
@@ -215,7 +259,8 @@ callbacks_from_abstract_code(Behaviour, Beamfile) ->
                 [Function || {attribute, _, callback, {Function, _}} <- Forms],
             Optional =
                 lists:append(
-                  [Functions || {attribute, _, optional_callbacks, Functions} <- Forms]),
+                    [Functions || {attribute, _, optional_callbacks, Functions} <- Forms]
+                ),
             {ok, {Callbacks, Optional}};
         {ok, {Behaviour, [{abstract_code, no_abstract_code}]}} ->
             {error, no_abstract_code};
@@ -256,8 +301,10 @@ validate_gen_fun_capabilities(Module, Attributes, DeclaredBehaviours) ->
 gen_fun_options(Module, Attributes) ->
     Legacy = lists:flatten(proplists:get_all_values(gen_fun, Attributes)),
     Retained =
-        [normalize_gen_fun_metadata(Module, Metadata)
-         || Metadata <- attribute_values(gen_fun_meta, Attributes)],
+        [
+            normalize_gen_fun_metadata(Module, Metadata)
+         || Metadata <- attribute_values(gen_fun_meta, Attributes)
+        ],
     Legacy ++ Retained.
 
 normalize_gen_fun_metadata(_Module, {1, Options}) when is_map(Options) ->
@@ -274,31 +321,38 @@ gen_fun_capabilities(_Opts) ->
 
 merge_behaviour_modules(BehaviourModules, NewBehaviourModules) ->
     maps:fold(
-      fun(Key, Module, Acc) ->
-              case maps:find(Key, Acc) of
-                  {ok, Module} ->
-                      Acc;
-                  {ok, ExistingModule} ->
-                      validation_error(
-                        {conflicting_instance, Key, ExistingModule, Module});
-                  error ->
-                      maps:put(Key, Module, Acc)
-              end
-      end, BehaviourModules, NewBehaviourModules).
+        fun(Key, Module, Acc) ->
+            case maps:find(Key, Acc) of
+                {ok, Module} ->
+                    Acc;
+                {ok, ExistingModule} ->
+                    validation_error(
+                        {conflicting_instance, Key, ExistingModule, Module}
+                    );
+                error ->
+                    maps:put(Key, Module, Acc)
+            end
+        end,
+        BehaviourModules,
+        NewBehaviourModules
+    ).
 
 validation_error(Reason) ->
     erlang:error({erlando_validation, Reason}).
 
 compile(#state{types = Types, typeclasses = Typeclasses, behaviour_modules = BehaviourModules}) ->
-    TypeclassModule = {attribute,0,module,typeclass},
-    Export = {attribute,0,export,[{module,2}, {is_typeclass, 1}, {type, 1}]},
+    TypeclassModule = {attribute, 0, module, typeclass},
+    Export = {attribute, 0, export, [{module, 2}, {is_typeclass, 1}, {type, 1}]},
     ResolvedTypes =
         maps:map(
-          fun(Type, undefined) ->
-                  [{tuple,[{atom, Type},any]}];
-             (_Type, Patterns) ->
-                  Patterns
-          end, Types),
+            fun
+                (Type, undefined) ->
+                    [{tuple, [{atom, Type}, any]}];
+                (_Type, Patterns) ->
+                    Patterns
+            end,
+            Types
+        ),
     TypesFun = generate_type(ResolvedTypes),
     IsTypeClass = generate_is_typeclass(Typeclasses),
     Module = generate_module(BehaviourModules),
@@ -335,12 +389,13 @@ get_core_from_beam(BeamFile) ->
     end.
 
 type_with_remote(Module, Type, Args, ExportedTypes, TRecMap, OtpVersion) ->
-    RecMap = case dict:find(Module, TRecMap) of
-                 {ok, Val} ->
-                     Val;
-                 error ->
-                     #{}
-             end,
+    RecMap =
+        case dict:find(Module, TRecMap) of
+            {ok, Val} ->
+                Val;
+            error ->
+                #{}
+        end,
     Type0 = {type, Type, Args},
     Type1 = {type, {Module, Type, Args}},
     case maps:find(Type0, RecMap) of
@@ -371,67 +426,92 @@ t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r20_up) ->
     case OtpRelease >= 25 of
         true ->
             t_from_form_with_exported_types_table(
-              TypeForm, ExportedTypes, TypeSite, VarTable, Cache);
+                TypeForm, ExportedTypes, TypeSite, VarTable, Cache
+            );
         false ->
             {CType, _NCache} =
                 erl_types:t_from_form(
-                  TypeForm, ExportedTypes, TypeSite,
-                  undefined, VarTable, Cache),
+                    TypeForm,
+                    ExportedTypes,
+                    TypeSite,
+                    undefined,
+                    VarTable,
+                    Cache
+                ),
             CType
     end;
 t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, r19) ->
     Cache = erl_types:cache__new(),
     VarTable = erl_types:var_table__new(),
-    {CType, _NCache} = erl_types:t_from_form(TypeForm, ExportedTypes, Type1, TRecMap, VarTable, Cache),
+    {CType, _NCache} = erl_types:t_from_form(
+        TypeForm, ExportedTypes, Type1, TRecMap, VarTable, Cache
+    ),
     CType.
 
 t_from_form_with_exported_types_table(
-  TypeForm, ExportedTypes, TypeSite, VarTable, Cache) ->
+    TypeForm, ExportedTypes, TypeSite, VarTable, Cache
+) ->
     ExportedTypesTable = ets:new(exported_types, [set]),
     true = ets:insert(
-             ExportedTypesTable,
-             [{ExportedType} ||
-                 ExportedType <- sets:to_list(ExportedTypes)]),
+        ExportedTypesTable,
+        [
+            {ExportedType}
+         || ExportedType <- sets:to_list(ExportedTypes)
+        ]
+    ),
     try
         {CType, _NCache} =
             erl_types:t_from_form(
-              TypeForm, ExportedTypesTable, TypeSite,
-              undefined, VarTable, Cache),
+                TypeForm,
+                ExportedTypesTable,
+                TypeSite,
+                undefined,
+                VarTable,
+                Cache
+            ),
         CType
     after
         ets:delete(ExportedTypesTable)
     end.
 
 type_to_patterns({c, tuple, Tuples, _}) ->
-    TupleLists = 
+    TupleLists =
         lists:foldl(
-          fun(TupleValue, Accs) ->
-              Patterns = type_to_patterns(TupleValue),
-                  case Accs of
-                      [] ->
-                          lists:map(
+            fun(TupleValue, Accs) ->
+                Patterns = type_to_patterns(TupleValue),
+                case Accs of
+                    [] ->
+                        lists:map(
                             fun(Pattern) ->
-                                    [Pattern]
-                            end, Patterns);
-                      Accs ->
-                          [[Pattern|AccValue] || 
-                              AccValue <- Accs,
-                              Pattern <- Patterns
-                          ]
-                  end
-          end, [], Tuples),
+                                [Pattern]
+                            end,
+                            Patterns
+                        );
+                    Accs ->
+                        [
+                            [Pattern | AccValue]
+                         || AccValue <- Accs,
+                            Pattern <- Patterns
+                        ]
+                end
+            end,
+            [],
+            Tuples
+        ),
     lists:map(
-      fun(TupleList) ->
-              {tuple, lists:reverse(TupleList)}
-      end, TupleLists);
+        fun(TupleList) ->
+            {tuple, lists:reverse(TupleList)}
+        end,
+        TupleLists
+    );
 type_to_patterns({c, function, _Function, _}) ->
     [{guard, is_function}];
 type_to_patterns({c, atom, Atoms, _}) ->
     lists:map(fun(Atom) -> {atom, Atom} end, Atoms);
 type_to_patterns({c, tuple_set, [{_N, Sets}], _}) ->
-    lists:foldl(fun(Item, Acc) -> type_to_patterns(Item) ++ Acc end, [],Sets);
+    lists:foldl(fun(Item, Acc) -> type_to_patterns(Item) ++ Acc end, [], Sets);
 type_to_patterns({c, union, Unions, _}) ->
-    lists:foldl(fun(Item, Acc) -> type_to_patterns(Item) ++ Acc end, [],Unions);
+    lists:foldl(fun(Item, Acc) -> type_to_patterns(Item) ++ Acc end, [], Unions);
 type_to_patterns({c, list, _, _}) ->
     [{guard, is_list}];
 type_to_patterns({c, map, _, _}) ->
@@ -448,9 +528,9 @@ type_to_patterns({c, _Type, _Body, _Qualifier}) ->
     [].
 
 pattern_to_clause(Line, Type, Pattern) ->
-    {NPattern, Guards, _} = 
+    {NPattern, Guards, _} =
         pattern_to_pattern_gurads(Line, Pattern, [], 1),
-    GuardTest = 
+    GuardTest =
         case Guards of
             [] ->
                 [];
@@ -460,13 +540,16 @@ pattern_to_clause(Line, Type, Pattern) ->
     {clause, Line, [NPattern], GuardTest, [{atom, Line, Type}]}.
 
 pattern_to_pattern_gurads(Line, {tuple, Tuples}, Guards, Offset) ->
-    {TupleList, NGuards, NOffset} = 
+    {TupleList, NGuards, NOffset} =
         lists:foldl(
-          fun(Element, {PatternAcc, GuardAcc, OffsetAcc}) ->
-                  {Pattern, NGuardAcc, NOffsetAcc} = 
-                      pattern_to_pattern_gurads(Line, Element, GuardAcc, OffsetAcc),
-                  {[Pattern|PatternAcc], NGuardAcc, NOffsetAcc}
-          end, {[], Guards, Offset}, Tuples),
+            fun(Element, {PatternAcc, GuardAcc, OffsetAcc}) ->
+                {Pattern, NGuardAcc, NOffsetAcc} =
+                    pattern_to_pattern_gurads(Line, Element, GuardAcc, OffsetAcc),
+                {[Pattern | PatternAcc], NGuardAcc, NOffsetAcc}
+            end,
+            {[], Guards, Offset},
+            Tuples
+        ),
     {{tuple, Line, lists:reverse(TupleList)}, NGuards, NOffset};
 pattern_to_pattern_gurads(Line, any, Guards, Offset) ->
     {{var, Line, '_'}, Guards, Offset};
@@ -474,27 +557,34 @@ pattern_to_pattern_gurads(Line, {atom, Atom}, Guards, Offset) ->
     {{atom, Line, Atom}, Guards, Offset};
 pattern_to_pattern_gurads(Line, {guard, Guard}, Guards, Offset) ->
     ArgName = list_to_atom("Args" ++ integer_to_list(Offset)),
-    {{var, Line, ArgName},
-     [{call, Line, {atom, Line, Guard}, [{var, Line, ArgName}]}|Guards], Offset + 1}.
+    {
+        {var, Line, ArgName},
+        [{call, Line, {atom, Line, Guard}, [{var, Line, ArgName}]} | Guards],
+        Offset + 1
+    }.
 
 module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion) ->
     TypeAttrs = types(Attributes),
     Behaviours0 = behaviours(Attributes),
     Behaviours1 = erlando_behaviours(Attributes),
     Behaviours = Behaviours0 ++ Behaviours1,
-    TypeInstanceMap = 
+    TypeInstanceMap =
         lists:foldl(
-          fun({Type, UsedTypes}, Acc1) ->
-                  Patterns = type_patterns(Module, UsedTypes, ETypes, ModRecs, OtpVersion),
-                  maps:put(Type, Patterns, Acc1);
-             (Type, Acc1) when is_atom(Type) ->
-                  case maps:find(Type, Acc1) of
-                      {ok, _Patterns} ->
-                          Acc1;
-                      error ->
-                          maps:put(Type, undefined, Acc1)
-                  end
-          end, maps:new(), TypeAttrs),
+            fun
+                ({Type, UsedTypes}, Acc1) ->
+                    Patterns = type_patterns(Module, UsedTypes, ETypes, ModRecs, OtpVersion),
+                    maps:put(Type, Patterns, Acc1);
+                (Type, Acc1) when is_atom(Type) ->
+                    case maps:find(Type, Acc1) of
+                        {ok, _Patterns} ->
+                            Acc1;
+                        error ->
+                            maps:put(Type, undefined, Acc1)
+                    end
+            end,
+            maps:new(),
+            TypeAttrs
+        ),
     Types = maps:keys(TypeInstanceMap),
     TypeBehaviourMap =
         case instance_metadata(Module, Attributes) of
@@ -502,40 +592,52 @@ module_type_info(Module, Attributes, Typeclasses, ETypes, ModRecs, OtpVersion) -
                 legacy_type_behaviour_map(Module, Types, Behaviours, Typeclasses);
             {metadata, Instances} ->
                 lists:foldl(
-                  fun(Instance, Acc) ->
-                          Type = maps:get(type, Instance),
-                          Behaviour = maps:get(typeclass, Instance),
-                          maps:put({Type, Behaviour}, Module, Acc)
-                  end, maps:new(), Instances)
+                    fun(Instance, Acc) ->
+                        Type = maps:get(type, Instance),
+                        Behaviour = maps:get(typeclass, Instance),
+                        maps:put({Type, Behaviour}, Module, Acc)
+                    end,
+                    maps:new(),
+                    Instances
+                )
         end,
     {TypeInstanceMap, TypeBehaviourMap}.
 
 legacy_type_behaviour_map(Module, Types, Behaviours, Typeclasses) ->
     lists:foldl(
-      fun(Type, Acc1) ->
-              lists:foldl(
+        fun(Type, Acc1) ->
+            lists:foldl(
                 fun(Behaviour, Acc2) ->
-                        case ordsets:is_element(Behaviour, Typeclasses) of
-                            true ->
-                                maps:put({Type, Behaviour}, Module, Acc2);
-                            false ->
-                                Acc2
-                        end
-                end, Acc1, Behaviours)
-      end, maps:new(), Types).
+                    case ordsets:is_element(Behaviour, Typeclasses) of
+                        true ->
+                            maps:put({Type, Behaviour}, Module, Acc2);
+                        false ->
+                            Acc2
+                    end
+                end,
+                Acc1,
+                Behaviours
+            )
+        end,
+        maps:new(),
+        Types
+    ).
 
 merge_type_instance(TypeInstanceMap, NTypeInstanceMap) ->
     maps:fold(
-      fun(Type, Pattern, Acc) ->
-              case maps:find(Type, Acc) of
-                  {ok, undefined} ->
-                      maps:put(Type, Pattern, Acc);
-                  {ok, _} ->
-                      Acc;
-                  error ->
-                      maps:put(Type, Pattern, Acc)
-              end
-      end, TypeInstanceMap, NTypeInstanceMap).
+        fun(Type, Pattern, Acc) ->
+            case maps:find(Type, Acc) of
+                {ok, undefined} ->
+                    maps:put(Type, Pattern, Acc);
+                {ok, _} ->
+                    Acc;
+                error ->
+                    maps:put(Type, Pattern, Acc)
+            end
+        end,
+        TypeInstanceMap,
+        NTypeInstanceMap
+    ).
 
 types(Attributes) ->
     lists:flatten(proplists:get_value(erlando_type, Attributes, [])).
@@ -547,72 +649,89 @@ erlando_behaviours(Attributes) ->
     proplists:get_value(erlando_future_behaviour, Attributes, []).
 
 generate_type(Types) ->
-    Clauses = 
+    Clauses =
         maps:fold(
-          fun(Type, Patterns, Acc) ->
-                  NPatterns = 
-                      case Patterns of
-                          undefined ->
-                              [{tuple,[{atom, Type},any]}];
-                          _ ->
-                              Patterns
-                      end,
-                  lists:map(
+            fun(Type, Patterns, Acc) ->
+                NPatterns =
+                    case Patterns of
+                        undefined ->
+                            [{tuple, [{atom, Type}, any]}];
+                        _ ->
+                            Patterns
+                    end,
+                lists:map(
                     fun(Pattern) ->
-                            pattern_to_clause(0, Type, Pattern)
-                    end, NPatterns) ++ Acc
-          end, [], Types),
+                        pattern_to_clause(0, Type, Pattern)
+                    end,
+                    NPatterns
+                ) ++ Acc
+            end,
+            [],
+            Types
+        ),
     LastClause = {clause, 0, [{var, 0, '_'}], [], [{atom, 0, undefined}]},
     {function, 0, type, 1, Clauses ++ [LastClause]}.
 
 generate_is_typeclass(Typeclasses) ->
-   Clauses = 
+    Clauses =
         lists:foldl(
-          fun(Typeclass, Acc) ->
-                  [is_typeclass_clause(0, Typeclass)|Acc]
-          end, [], Typeclasses),
+            fun(Typeclass, Acc) ->
+                [is_typeclass_clause(0, Typeclass) | Acc]
+            end,
+            [],
+            Typeclasses
+        ),
     LastClause = {clause, 0, [{var, 0, '_A'}], [], [{atom, 0, false}]},
-    {function, 0, is_typeclass, 1, lists:reverse([LastClause|Clauses])}.
+    {function, 0, is_typeclass, 1, lists:reverse([LastClause | Clauses])}.
 
 generate_module(BehaviourModules) ->
-    Clauses = 
+    Clauses =
         maps:fold(
-          fun({Type, Behaviour}, Module, Acc) ->
-                  [module_clause(0, Type, Behaviour, Module)|Acc]
-          end, [], BehaviourModules),
-    LastClause = {clause, 0, [{var, 0, 'A'}, {var, 0, 'B'}], [], 
-                  [{call, 0, {atom, 0, exit}, 
-                    [{tuple, 0, [{atom, 0, unregisted_module}, {tuple, 0, [{var, 0, 'A'}, {var, 0, 'B'}]}]}]}]},
-    {function, 0, module, 2, lists:reverse([LastClause|Clauses])}.
+            fun({Type, Behaviour}, Module, Acc) ->
+                [module_clause(0, Type, Behaviour, Module) | Acc]
+            end,
+            [],
+            BehaviourModules
+        ),
+    LastClause =
+        {clause, 0, [{var, 0, 'A'}, {var, 0, 'B'}], [], [
+            {call, 0, {atom, 0, exit}, [
+                {tuple, 0, [
+                    {atom, 0, unregisted_module}, {tuple, 0, [{var, 0, 'A'}, {var, 0, 'B'}]}
+                ]}
+            ]}
+        ]},
+    {function, 0, module, 2, lists:reverse([LastClause | Clauses])}.
 
-   
 is_typeclass_clause(Line, Typeclass) ->
     {clause, Line, [{atom, Line, Typeclass}], [], [{atom, Line, true}]}.
 
 module_clause(Line, Type, Behaviour, Module) ->
-    {clause, 1, [{atom, Line, Type}, {atom, Line, Behaviour}], [],
-     [{atom, Line, Module}]}.
+    {clause, 1, [{atom, Line, Type}, {atom, Line, Behaviour}], [], [{atom, Line, Module}]}.
 
 type_patterns(Module, Types, ETypes, ModRecs, OtpVersion) ->
     lists:foldl(
-      fun({Type, Arity}, Acc) ->
-              case type_with_remote(Module, Type, Arity, ETypes, ModRecs, OtpVersion) of
-                  {ok, CType} ->
-                      Patterns = type_to_patterns(CType),
-                      lists:usort(Patterns ++ Acc);
-                  {error, _} ->
-                      Acc
-              end
-      end, [], Types).
+        fun({Type, Arity}, Acc) ->
+            case type_with_remote(Module, Type, Arity, ETypes, ModRecs, OtpVersion) of
+                {ok, CType} ->
+                    Patterns = type_to_patterns(CType),
+                    lists:usort(Patterns ++ Acc);
+                {error, _} ->
+                    Acc
+            end
+        end,
+        [],
+        Types
+    ).
 
 update_types_and_rec_map(Module, Core, AbsOrCore, Types, MRecDict) ->
     case rec_map(AbsOrCore) of
         {ok, RecMap} ->
             MTypes = exported_types(Core),
             NETypeAcc = sets:union(MTypes, Types),
-            NMRecDict = 
+            NMRecDict =
                 case maps:size(RecMap) of
-                            0 ->
+                    0 ->
                         MRecDict;
                     _ ->
                         dict:store(Module, RecMap, MRecDict)
@@ -625,9 +744,13 @@ update_types_and_rec_map(Module, Core, AbsOrCore, Types, MRecDict) ->
 
 exported_types(Core) ->
     Attrs = cerl:module_attrs(Core),
-    ExpTypes1 = [cerl:concrete(L2) || {L1, L2} <- Attrs, cerl:is_literal(L1),
-                                      cerl:is_literal(L2),
-                                      cerl:concrete(L1) =:= 'export_type'],
+    ExpTypes1 = [
+        cerl:concrete(L2)
+     || {L1, L2} <- Attrs,
+        cerl:is_literal(L1),
+        cerl:is_literal(L2),
+        cerl:concrete(L1) =:= 'export_type'
+    ],
     ExpTypes2 = lists:flatten(ExpTypes1),
     M = cerl:atom_val(cerl:module_name(Core)),
     sets:from_list([{M, F, A} || {F, A} <- ExpTypes2]).

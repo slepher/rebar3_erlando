@@ -20,15 +20,19 @@
 fold_beams(Fun, Init, Path) ->
     case file:list_dir(Path) of
         {ok, Filenames} ->
-            {ok, lists:foldl(
-                   fun(Filename, Acc) ->
-                           case filename:extension(Filename) of
-                               ".beam" ->
-                                   Fun(filename:join(Path, Filename), Acc);
-                               _ ->
-                                   Acc
-                           end
-                   end, Init, lists:sort(Filenames))};
+            {ok,
+                lists:foldl(
+                    fun(Filename, Acc) ->
+                        case filename:extension(Filename) of
+                            ".beam" ->
+                                Fun(filename:join(Path, Filename), Acc);
+                            _ ->
+                                Acc
+                        end
+                    end,
+                    Init,
+                    lists:sort(Filenames)
+                )};
         {error, Reason} ->
             {error, Reason}
     end.

@@ -1,15 +1,15 @@
-{application, rebar3_erlando,
- [{description, "An OTP library"},
-   {vsn, "0.4.2"},
-  {registered, []},
-  {applications,
-   [kernel,
-    stdlib
-   ]},
-  {env,[]},
-  {modules, []},
+{application, rebar3_erlando, [
+    {description, "An OTP library"},
+    {vsn, "0.4.3"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib
+    ]},
+    {env, []},
+    {modules, []},
 
-  {maintainers, []},
-  {licenses, ["Apache 2.0"]},
-  {links, []}
- ]}.
+    {maintainers, []},
+    {licenses, ["Apache 2.0"]},
+    {links, []}
+]}.
