@@ -1,6 +1,6 @@
 [![CI](https://github.com/slepher/rebar3_erlando/actions/workflows/ci.yml/badge.svg?branch=master&event=push)](https://github.com/slepher/rebar3_erlando/actions/workflows/ci.yml?query=branch%3Amaster)
 
-[![CI](https://github.com/slepher/rebar3_erlando/actions/workflows/release.yml/badge.svg?branch=0.4.3&event=push)](https://github.com/slepher/rebar3_erlando/actions/workflows/release.yml?query=branch%3A0.4.3)
+[![CI](https://github.com/slepher/rebar3_erlando/actions/workflows/release.yml/badge.svg?branch=0.4.4&event=push)](https://github.com/slepher/rebar3_erlando/actions/workflows/release.yml?query=branch%3A0.4.4)
 
 erlando
 =====
