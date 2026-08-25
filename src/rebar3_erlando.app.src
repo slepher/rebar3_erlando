@@ -1,6 +1,6 @@
 {application, rebar3_erlando, [
     {description, "An OTP library"},
-   {vsn, "0.4.4"},
+   {vsn, "0.4.5"},
     {registered, []},
     {applications, [
         kernel,
